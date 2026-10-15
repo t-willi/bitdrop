@@ -1,6 +1,6 @@
 # bitdrop — ideation
 
-Status: **draft 0** · 2026-10-15 · nothing is decided; this is the thinking-out-loud document.
+Status: **draft 1** · 2026-10-15 · nothing is decided; this is the thinking-out-loud document.
 
 ## 1. Pitch
 
@@ -80,6 +80,8 @@ Components:
 
 Workers are stateless; the master is restartable because all state lives in the metadata store.
 
+The diagram shows the Redis-style dedicated data store (option C in section 7); sections 6–7 cover the alternatives.
+
 ## 4. Chunk lifecycle
 
 **The chunk — not the row — is the unit of extraction, buffering, loading, and retry.** Per-row status in Redis would
@@ -125,23 +127,15 @@ Principle: *the destination is the source of truth for "was this loaded"; Redis 
 
 ## 6. Hard problems and risks
 
-**Data-plane throughput.** Redis executes commands on one thread; a single instance will be bounded by one core and
-the NIC, and every byte crosses the network twice (extractor → Redis → loader). "Limited only by source and
-destination" is only true if the data plane is *not* the bottleneck. Plan: shard chunks across K data nodes (client-side
-hashing or Redis Cluster), and benchmark multi-threaded Redis-compatible stores (Dragonfly, Valkey with I/O threads).
-Treat any per-node GB/s figure as an assumption until measured.
+**Data-plane throughput.** Redis executes commands on one thread, and every byte crosses the network twice
+(extractor → Redis → loader). With MB-sized chunks the limit is socket I/O, memcpy bandwidth, and the NIC rather than
+command dispatch (see 7.1). "Limited only by source and destination" is only true if the data plane is *not* the
+bottleneck. Plan: shard chunks across K data nodes (client-side hashing or Redis Cluster) and benchmark the stores in
+7.2. Treat any per-node GB/s figure as an assumption until measured.
 
-**Is Redis the right data plane at all?** Keep it as the primary design, but put a `ChunkStore` interface in front so
-we can A/B it against:
-
-| Option | Pros | Cons |
-|---|---|---|
-| Redis / Valkey / Dragonfly (proposed) | Decouples extract and load fleets across hosts; elastic via sharding; crash-isolated | Extra network hop ×2; RAM overhead (fragmentation, buffers); serialization cost |
-| In-process / same-host buffer (Arrow batches over channels) | Fastest, zero extra hop, simplest | Bounded by one host's RAM; buffer dies with the process; harder to scale loaders independently |
-| Object storage staging (S3/GCS Parquet) | Durable, cheap, natural for warehouse loads | Slower; not "RAM-speed" |
-
-A single huge memory-optimized VM running an in-process buffer may beat a Redis cluster for many jobs. We should
-measure that rather than assume.
+**Is Redis the right data plane at all?** Not as a given. Put a `ChunkStore` interface in front and compare the
+options in section 7. Object-storage staging (S3/GCS Parquet) remains the durable, cheap, slower baseline and is the
+natural path for warehouse destinations.
 
 **Memory accounting.**
 - Row-size estimates from catalog stats (`pg_class.reltuples/relpages`, `avg_row_length`) are wrong for wide
@@ -185,7 +179,63 @@ decide later.
 **Licensing.** Redis changed its license in 2024 (RSAL/SSPL; AGPL option re-added in Redis 8). Valkey is the BSD fork.
 Relevant if this becomes a product — check current terms before committing.
 
-## 7. How this differs from what exists
+## 7. Data plane options
+
+*Added after the 2026-10-15 discussion. Nothing here is decided.*
+
+### 7.1 Single-threaded Redis matters less than it sounds
+
+At 16–64 MB per chunk, 10 GB/s is only about 160 operations per second. Command dispatch is not the limit; socket I/O,
+memcpy bandwidth, and the NIC are. Multi-threaded stores help mainly through I/O threading, not command parallelism.
+Side effect to remember: a large `GET` blocks other clients on that shard while it is copied out, a second reason to
+keep metadata on a separate instance.
+
+### 7.2 Candidate in-RAM stores
+
+| Store | Threading | Notes |
+|---|---|---|
+| Dragonfly | Shared-nothing, multi-threaded, vertical scaling | Redis API compatible; BSL license |
+| Valkey 8+ | I/O threads; command execution still mostly one thread | BSD; sharding via cluster |
+| Garnet (Microsoft) | Multi-threaded, RESP-compatible, .NET | MIT; built for high-throughput batched traffic |
+| Memcached | Multi-threaded | Simplest blob store; no persistence; client-side sharding; default 1 MB item limit is configurable |
+| KeyDB | Multi-threaded Redis fork | Appears stagnant; verify before betting on it |
+| NATS JetStream (memory streams) | Multi-threaded Go | Claim/ack/redelivery for free; built for small messages |
+| Ignite / Hazelcast / Alluxio | Distributed in-memory grids (JVM) | Heavier; bring their own partitioning and rebalancing |
+
+Shortlist to benchmark: **Dragonfly, Valkey cluster, memcached**. Vendor throughput figures are unverified until
+measured here; licenses need a check before committing.
+
+### 7.3 Shared memory in Kubernetes
+
+- **Same pod: works well.** Containers in a pod share an IPC namespace. A memory-backed `emptyDir` (tmpfs) mounted
+  into both containers is a shared buffer: the extractor writes an Arrow IPC file, the loader `mmap`s it, and the
+  data never touches the network. `/dev/shm` defaults to 64 MB, so mount an `emptyDir` with `medium: Memory` over it
+  and size it explicitly.
+- **Across pods or nodes: not possible.** RAM is per node. Sharing between pods on one node needs `hostPath` or
+  `hostIPC`, which weakens isolation and conflicts with restricted pod-security policies. Avoid.
+- **Accounting.** tmpfs usage counts against container memory limits, so the memory governor must track it. The
+  buffer dies with the pod, which is acceptable because the source is the durable copy.
+
+### 7.4 Three architectures
+
+| | Data path | Scales by | Trade-off |
+|---|---|---|---|
+| **A. Pod-local tmpfs** | extractor → tmpfs → loader, same pod | More pods, each owning disjoint chunk ranges | Fastest, no DB; buffer size is tied to the pod/node |
+| **B. Peer-to-peer (Arrow Flight)** | Extractors hold chunks in RAM; loaders pull over gRPC | Extractor and loader fleets scale independently | No DB; extractors are stateful until drained |
+| **C. Dedicated store** | extractor → Dragonfly / Valkey / memcached → loader | Buffer, extractors, loaders all independent | One extra network hop each way |
+
+"Every function in its own container" holds for all three. In A, a pod is one extractor container plus one loader
+container sharing the tmpfs; the master adjusts each container's connection count at runtime, so no pod restarts are
+needed. The master and the metadata Redis run as ordinary Deployments. Getting "a huge-RAM node for 20 minutes" comes
+from a node autoscaler (e.g. Karpenter) provisioning memory-optimized nodes for the job.
+
+### 7.5 Current leaning
+
+Build **A** first behind the `ChunkStore` interface: cheapest, fastest per node, one fewer component. Build **C**
+(Dragonfly) alongside and benchmark the two against each other (H5). Move to **B** only if independent
+extractor/loader scaling turns out to matter in practice.
+
+## 8. How this differs from what exists
 
 | Tool | Shape | Where bitdrop would differ |
 |---|---|---|
@@ -198,7 +248,7 @@ Relevant if this becomes a product — check current terms before committing.
 The honest one-sentence differentiator: **an explicitly budgeted, elastic RAM staging tier with independently scaled
 extract and load fleets, billed as a short burst.**
 
-## 8. Scope
+## 9. Scope
 
 **v1 (prove the hypothesis)**
 - Full load only, single table → many tables.
@@ -209,20 +259,20 @@ extract and load fleets, billed as a short burst.**
 **Explicitly later**
 - Incremental / cursor-based sync, CDC, schema evolution, transformations, UI, scheduling, multi-tenant.
 
-## 9. Falsifiable claims → first experiments
+## 10. Falsifiable claims → first experiments
 
 | # | Claim | Experiment |
 |---|---|---|
-| H1 | A Redis-compatible data plane sustains ≥ the faster of source/dest for 16–64 MB chunks | Producers/consumers benchmark across Redis, Valkey, Dragonfly; 1 node vs sharded; chunk size sweep |
+| H1 | A dedicated in-memory data plane sustains ≥ the faster of source/dest for 16–64 MB chunks | Producers/consumers benchmark across Redis, Valkey, Dragonfly, memcached; 1 node vs sharded; chunk size sweep |
 | H2 | Decoupling reduces *source-hold time* and/or total time vs direct streaming | Postgres → slow-ish destination, compare bitdrop vs a direct pipe (Sling/pgcopydb) at equal parallelism |
 | H3 | Chunk state + destination ledger gives zero duplicates and zero losses under crashes | Chaos test: `kill -9` random workers/master/data node mid-run, verify row counts + checksums |
 | H4 | Row-size estimator is within ±30 % on realistic schemas | Run against a few wide-column datasets; compare estimate vs actual serialized bytes |
-| H5 | In-process buffer on one big host vs Redis tier: where is the crossover? | Same job, `ChunkStore` swapped, vary dataset size and dest speed |
+| H5 | Pod-local tmpfs (A) vs dedicated store (C): where is the crossover? | Same job, `ChunkStore` swapped, vary dataset size and dest speed |
 
 If H1 fails badly, the architecture changes (in-process buffer or sharding becomes mandatory). Cheapest and most
 decisive experiment to run first.
 
-## 10. Open questions for the owner
+## 11. Open questions for the owner
 
 1. **Primary use case** — one-off migrations / initial loads, recurring full refreshes, or a path to incremental/CDC?
 2. **Where it runs** — ephemeral cloud (which cloud?), on-prem, or developer laptop → big VM?
@@ -234,3 +284,5 @@ decisive experiment to run first.
    whatever RAM it is pointed at (and leave provisioning to Terraform/k8s)?
 7. **Delivery semantics** — is exactly-once at the destination a hard requirement, or is at-least-once + idempotent
    destination acceptable?
+8. **Buffer span** — is a buffer bounded by one (very large) node per pod acceptable, or must a single job's buffer
+   span multiple nodes? This decides whether option A is enough or B/C is required.
