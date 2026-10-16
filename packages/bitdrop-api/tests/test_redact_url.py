@@ -2,7 +2,7 @@
 
 import pytest
 
-from bitdrop_api.urls import redact_url
+from bitdrop_api.urls import parse_url, redact_url
 
 
 class TestRedactUrl:
@@ -39,3 +39,26 @@ class TestRedactUrl:
         redacted = redact_url(url)
 
         assert "secret" not in redacted
+
+
+class TestErrorsNeverEchoSecrets:
+    """A mistyped URL is exactly when a password is on screen; the error must not repeat it."""
+
+    @pytest.mark.parametrize(
+        ("url", "scheme", "allowed"),
+        [
+            pytest.param("memory://user:s3cret@host", "memory", (), id="host-with-password"),
+            pytest.param("redis://user:s3cret@host", "memory", (), id="wrong-scheme"),
+            pytest.param(
+                "file:///p?password=s3cret&password=other", "file", ("password",), id="repeated"
+            ),
+            pytest.param("memory://?password=s3cret", "memory", (), id="unknown-parameter"),
+        ],
+    )
+    def test_component_url_errors_hide_passwords(
+        self, url: str, scheme: str, allowed: tuple[str, ...]
+    ) -> None:
+        with pytest.raises(ValueError, match=scheme) as caught:
+            parse_url(url, scheme=scheme, allowed_params=allowed)
+
+        assert "s3cret" not in str(caught.value)

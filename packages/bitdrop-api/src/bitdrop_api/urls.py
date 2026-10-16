@@ -54,9 +54,11 @@ def parse_url(url: str, *, scheme: str, allowed_params: Collection[str]) -> Pars
     """
     parts = urlsplit(url)
     if parts.scheme != scheme or not url.startswith(f"{scheme}://"):
-        raise ValueError(f"expected a URL with scheme {scheme!r} like {scheme}://..., got {url!r}")
+        raise ValueError(
+            f"expected a URL with scheme {scheme!r} like {scheme}://..., got {redact_url(url)!r}"
+        )
     if parts.netloc:
-        raise ValueError(f"{scheme}:// URLs take no host, found {parts.netloc!r} in {url!r}")
+        raise ValueError(f"{scheme}:// URLs take no host, found one in {redact_url(url)!r}")
 
     params: dict[str, str] = {}
     for name, value in parse_qsl(parts.query, keep_blank_values=True):
@@ -64,7 +66,7 @@ def parse_url(url: str, *, scheme: str, allowed_params: Collection[str]) -> Pars
             allowed = ", ".join(sorted(allowed_params)) or "none"
             raise ValueError(f"unknown parameter {name!r} for {scheme}:// (allowed: {allowed})")
         if name in params:
-            raise ValueError(f"parameter {name!r} given more than once in {url!r}")
+            raise ValueError(f"parameter {name!r} given more than once in {redact_url(url)!r}")
         params[name] = value
 
     return ParsedUrl(scheme=scheme, path=unquote(parts.path), params=params)

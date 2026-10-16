@@ -65,7 +65,7 @@ Updated as the work proceeds; see the agent log for the authoritative state.
 
 - [x] 1 progress events
 - [x] 2 release on stop
-- [ ] 3 CLI
+- [x] 3 CLI
 - [ ] 4 end-to-end through the CLI
 - [ ] 5 TUI
 - [ ] 6 documentation and guards

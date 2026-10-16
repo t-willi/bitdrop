@@ -480,6 +480,23 @@ class GateDestination(MemoryDestination):
         return await super().write_chunk(job_id, chunk_id, table, data)
 
 
+class SlowReplyMetadata(MemoryMetadataStore):
+    """Records a claim at once but takes a while to answer, as a store over a network can."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.granted = 0
+
+    async def claim(
+        self, job_id: str, stage: Stage, *, worker_id: str, lease_seconds: float
+    ) -> Claim | None:
+        claim = await super().claim(job_id, stage, worker_id=worker_id, lease_seconds=lease_seconds)
+        if claim is not None:
+            self.granted += 1
+        await asyncio.sleep(0.3)  # the reply is on its way
+        return claim
+
+
 async def stop_when(w: World, ready: Callable[[], bool], cfg: TransferConfig) -> None:
     """Start the job, wait until ``ready()``, then cancel it and wait for the cleanup to finish."""
     job = asyncio.create_task(run(w, cfg))
@@ -544,6 +561,20 @@ class TestStoppingOnPurpose:
         assert report.succeeded
         assert copied(w).equals(make_rows(1, 1000))
         assert report.chunks_failed == 0
+
+    async def test_a_claim_granted_while_the_run_is_cancelled_is_handed_back_too(self) -> None:
+        """Over a network the store may record a claim and the reply may never be read.
+
+        The worker never sees such a claim, so it cannot know to give it back unless the runner
+        waits for the answer of a claim call that was already under way.
+        """
+        meta = SlowReplyMetadata()
+        w = world(meta=meta, rows=1000)
+        cfg = config(lease_seconds=60.0, extractors=2)
+
+        await stop_when(w, lambda: meta.granted >= 2, cfg)
+
+        await assert_nothing_is_held_and_nothing_failed(w)
 
     async def test_stopping_a_finished_job_is_harmless(self) -> None:
         w = world(rows=300)

@@ -1,0 +1,21 @@
+[project]
+name = "bitdrop-cli"
+version = "0.1.0"
+description = "The bitdrop command line tool: job files, run / plan / status, plain and JSON-lines progress."
+requires-python = ">=3.14"
+dependencies = ["bitdrop-api", "bitdrop-core", "pydantic>=2.7", "typer>=0.12"]
+
+[project.scripts]
+bitdrop = "bitdrop_cli:main"
+
+[project.entry-points."bitdrop.uis"]
+plain = "bitdrop_cli.plain:create_ui"
+json = "bitdrop_cli.jsonlines:create_ui"
+
+[tool.uv.sources]
+bitdrop-api = { workspace = true }
+bitdrop-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"

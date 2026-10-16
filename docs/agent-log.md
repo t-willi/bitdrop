@@ -45,6 +45,7 @@ Last feature commit: `5425f67`.
 | Chunk stores | `bitdrop-store-memory`, `bitdrop-store-file`, `bitdrop-store-redis` | `memory://`, `file:///dir` (use a tmpfs for RAM), `redis://` (Redis, Valkey, Dragonfly; same kit passes on all three) |
 | Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host) |
 | Connectors | `bitdrop-connector-memory`, `bitdrop-connector-postgres` | `memory://` source+destination; `postgresql://` source (primary-key range splitting) and destination (ledger, native types) |
+| Command line | `bitdrop-cli` | the `bitdrop` command: `run`, `plan`, `status`, `components`; TOML job file; plain and JSON-lines progress; exit codes; Ctrl-C and SIGTERM hand chunks back |
 | Cross-package tests | `tests/integration`, `tests/e2e`, `tests/architecture` | swap tests, runner with injected faults, real PostgreSQL to PostgreSQL, architecture rules, this log's checks |
 | Benchmarks | `benchmarks/test_chunk_store_throughput.py` | `make bench`: chunk store throughput table |
 | Tooling | `scripts/mutation_check.sh`, `scripts/add_workspace_package.py` | break-the-code-on-purpose check; register a new workspace package |
@@ -55,7 +56,7 @@ killed after its commit; a run killed halfway and resumed; the staging server wi
 and Dragonfly. Details and numbers: `docs/ideation.md`, section 12.
 
 **What the user can run:** `uv run pytest tests/e2e -s` (end-to-end with throughput printed), `make bench`.
-There is **no CLI yet**: a transfer is a Python function call (example in `docs/development.md`).
+A transfer is also a `bitdrop run job.toml` away (see `docs/cli-plan.md`; the TUI is still to come).
 
 ## 3. Decisions
 

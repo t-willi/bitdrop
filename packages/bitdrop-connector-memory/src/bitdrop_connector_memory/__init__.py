@@ -28,6 +28,7 @@ __all__ = [
     "MemorySource",
     "create_destination",
     "create_source",
+    "demo_table",
 ]
 
 

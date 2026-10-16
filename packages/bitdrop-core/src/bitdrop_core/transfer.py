@@ -51,7 +51,7 @@ from bitdrop_core.progress import (
     TransferObserver,
 )
 
-__all__ = ["TransferConfig", "TransferReport", "run_transfer"]
+__all__ = ["TransferConfig", "TransferReport", "effective_chunk_bytes", "run_transfer"]
 
 _LOG = logging.getLogger("bitdrop.transfer")
 
@@ -195,7 +195,7 @@ async def run_transfer(
     """
     started = time.monotonic()
     notify = Notifier(observer, _LOG)
-    target = _effective_target(config, chunk_store)
+    target = effective_chunk_bytes(config, chunk_store)
     plan = await source.plan(
         config.source_table, target_chunk_bytes=target, split_column=config.split_column
     )
@@ -258,7 +258,12 @@ async def run_transfer(
     return report
 
 
-def _effective_target(config: TransferConfig, chunk_store: ChunkStore) -> int:
+def effective_chunk_bytes(config: TransferConfig, chunk_store: ChunkStore) -> int:
+    """Return the chunk size a job really uses: its wish, shrunk to what the chunk store can hold.
+
+    Chunks are sized to half the store's value limit, because encoding adds overhead and the sizes
+    the source estimates are estimates.
+    """
     limit = chunk_store.capabilities().max_value_bytes
     if limit is None:
         return config.target_chunk_bytes
@@ -399,13 +404,32 @@ class _Transfer:
         cfg = self._config
         handler = self._extract if stage is Stage.EXTRACT else self._load
         while True:
-            claim = await self._meta.claim(
-                cfg.job_id, stage, worker_id=name, lease_seconds=cfg.lease_seconds
-            )
+            claim = await self._claim(stage, name)
             if claim is None:
                 await asyncio.sleep(cfg.poll_interval)
                 continue
             await self._process(claim, handler)
+
+    async def _claim(self, stage: Stage, name: str) -> Claim | None:
+        """Claim a chunk. If the run is cancelled meanwhile, hand back what the call granted.
+
+        The store may record a claim and have the worker cancelled before the answer is read (a
+        store reached over a network, or one that works in a thread). The worker would never learn
+        of that chunk, and it would stay held until its lease ran out.
+        """
+        cfg = self._config
+        attempt = asyncio.ensure_future(
+            self._meta.claim(cfg.job_id, stage, worker_id=name, lease_seconds=cfg.lease_seconds)
+        )
+        try:
+            return await asyncio.shield(attempt)
+        except asyncio.CancelledError:
+            with suppress(Exception):
+                async with asyncio.timeout(cfg.chunk_timeout):
+                    late = await attempt
+                if late is not None:
+                    await self._hand_back(late)
+            raise
 
     async def _process(self, claim: Claim, handler: Callable[[Claim], Awaitable[_Outcome]]) -> None:
         """Run ``handler`` for the claim while keeping its lease alive; report any failure.

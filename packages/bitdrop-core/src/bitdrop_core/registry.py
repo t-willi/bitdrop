@@ -30,6 +30,7 @@ from bitdrop_api.destination import Destination
 from bitdrop_api.errors import BitdropError
 from bitdrop_api.metadata_store import MetadataStore
 from bitdrop_api.source import Source
+from bitdrop_api.urls import redact_url
 from bitdrop_core.ui import ProgressUi, UiContext
 
 CHUNK_STORE_GROUP = "bitdrop.chunk_stores"
@@ -204,7 +205,9 @@ def _open(kind: _Kind, url: str, factories: Mapping[str, Callable[[str], object]
     """Resolve the URL's scheme to a factory, call it, and check the result's contract."""
     parts = urlsplit(url)
     if not parts.scheme or not url.startswith(f"{parts.scheme}://"):
-        raise ValueError(f"expected a URL starting with a scheme like 'memory://', got {url!r}")
+        raise ValueError(
+            f"expected a URL starting with a scheme like 'memory://', got {redact_url(url)!r}"
+        )
 
     component = _find_factory(kind, parts.scheme, factories)(url)
     if not isinstance(component, kind.contract):

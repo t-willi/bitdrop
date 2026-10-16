@@ -16,6 +16,7 @@ dependencies = [
     "bitdrop-connector-memory",
     "bitdrop-connector-postgres",
     "bitdrop-store-redis",
+    "bitdrop-cli",
 ]
 
 [dependency-groups]
@@ -46,6 +47,7 @@ bitdrop-metadata-sqlite = { workspace = true }
 bitdrop-connector-memory = { workspace = true }
 bitdrop-connector-postgres = { workspace = true }
 bitdrop-store-redis = { workspace = true }
+bitdrop-cli = { workspace = true }
 
 # ---------------------------------------------------------------------------------------------
 # pytest
@@ -79,6 +81,7 @@ known-first-party = [
     "bitdrop_connector_memory",
     "bitdrop_connector_postgres",
     "bitdrop_store_redis",
+    "bitdrop_cli",
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -110,6 +113,7 @@ mypy_path = [
     "packages/bitdrop-connector-memory/src",
     "packages/bitdrop-connector-postgres/src",
     "packages/bitdrop-store-redis/src",
+    "packages/bitdrop-cli/src",
 ]
 
 [[tool.mypy.overrides]]
@@ -131,6 +135,7 @@ root_packages = [
     "bitdrop_connector_memory",
     "bitdrop_connector_postgres",
     "bitdrop_store_redis",
+    "bitdrop_cli",
 ]
 
 [[tool.importlinter.contracts]]
@@ -139,6 +144,22 @@ type = "layers"
 # Names on one line separated by "|" are siblings: independent of each other.
 # Everything may import from a layer below it, never from one above or beside it.
 layers = [
+    "bitdrop_cli",
     "bitdrop_core | bitdrop_store_memory | bitdrop_store_file | bitdrop_metadata_memory | bitdrop_metadata_sqlite | bitdrop_connector_memory | bitdrop_connector_postgres | bitdrop_store_redis",
     "bitdrop_api",
+]
+
+[[tool.importlinter.contracts]]
+name = "The command line tool and the displays never import a concrete adapter"
+type = "forbidden"
+# They find adapters through the registry, by URL scheme (or display name), like the core does.
+source_modules = ["bitdrop_cli"]
+forbidden_modules = [
+    "bitdrop_store_memory",
+    "bitdrop_store_file",
+    "bitdrop_store_redis",
+    "bitdrop_metadata_memory",
+    "bitdrop_metadata_sqlite",
+    "bitdrop_connector_memory",
+    "bitdrop_connector_postgres",
 ]
