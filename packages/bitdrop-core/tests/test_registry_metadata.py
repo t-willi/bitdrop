@@ -30,6 +30,12 @@ class StubMetadataStore:
     async def register_chunks(self, *args: Any, **kwargs: Any) -> int:
         return 0
 
+    async def save_plan(self, *args: Any, **kwargs: Any) -> bytes:
+        return b""
+
+    async def load_plan(self, *args: Any, **kwargs: Any) -> bytes | None:
+        return None
+
     async def claim(self, *args: Any, **kwargs: Any) -> None:
         return None
 

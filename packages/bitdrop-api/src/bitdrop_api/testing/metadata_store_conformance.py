@@ -174,6 +174,71 @@ class MetadataStoreConformance:
 
         assert (excinfo.value.job_id, excinfo.value.chunk_id) == (JOB, "nope")
 
+    # -- the saved plan -------------------------------------------------------------------------
+
+    async def test_a_job_without_a_plan_has_none(self, store: MetadataStore) -> None:
+        """Asking for the plan of a job that never saved one is not an error."""
+        assert await store.load_plan(JOB) is None
+
+    async def test_a_saved_plan_is_loaded_unchanged(self, store: MetadataStore) -> None:
+        """The store keeps the bytes it is given exactly, whatever they contain."""
+        # NULs at both ends, newlines, non-text: nothing may be trimmed, decoded, or mangled
+        every_byte = b"\x00" + bytes(range(256)) * 4 + b"\x00\x00"
+
+        stored = await store.save_plan(JOB, every_byte)
+
+        assert stored == every_byte
+        assert await store.load_plan(JOB) == every_byte
+
+    async def test_the_first_saved_plan_wins(self, store: MetadataStore) -> None:
+        """A second save changes nothing and answers with the plan that is stored."""
+        await store.save_plan(JOB, b"first")
+
+        answer = await store.save_plan(JOB, b"second")
+
+        assert answer == b"first"
+        assert await store.load_plan(JOB) == b"first"
+
+    async def test_concurrent_saves_agree_on_one_plan(self, store: MetadataStore) -> None:
+        """Two masters planning at once must end up with the same plan."""
+        candidates = [f"plan-{i}".encode() for i in range(8)]
+
+        answers = await asyncio.gather(*(store.save_plan(JOB, plan) for plan in candidates))
+
+        assert len(set(answers)) == 1
+        assert answers[0] in candidates
+        assert await store.load_plan(JOB) == answers[0]
+
+    async def test_a_large_plan_is_kept(self, store: MetadataStore) -> None:
+        """A table with very many chunks has a plan of megabytes."""
+        big = b"x" * (4 * 1024 * 1024)
+
+        await store.save_plan(JOB, big)
+
+        assert await store.load_plan(JOB) == big
+
+    async def test_plans_belong_to_their_job(self, store: MetadataStore) -> None:
+        """One job's plan is invisible to every other job."""
+        await store.save_plan("job-a", b"plan of a")
+
+        assert await store.load_plan("job-b") is None
+        assert await store.save_plan("job-b", b"plan of b") == b"plan of b"
+        assert await store.load_plan("job-a") == b"plan of a"
+
+    async def test_saving_a_plan_registers_no_chunks(self, store: MetadataStore) -> None:
+        """The plan is a document; the chunks it lists are registered separately."""
+        await store.save_plan(JOB, b"a plan")
+
+        assert (await store.counts(JOB)) == dict.fromkeys(ChunkState, 0)
+
+    @pytest.mark.parametrize("bad_id", ["", "has space", "a/b", "x" * 201])
+    async def test_a_plan_needs_a_valid_job_id(self, store: MetadataStore, bad_id: str) -> None:
+        """Job ids follow the shared key rule for plans too."""
+        with pytest.raises(InvalidKey):
+            await store.save_plan(bad_id, b"plan")
+        with pytest.raises(InvalidKey):
+            await store.load_plan(bad_id)
+
     # -- claiming -------------------------------------------------------------------------------
 
     async def test_claim_takes_a_pending_chunk_for_extraction(self, store: MetadataStore) -> None:

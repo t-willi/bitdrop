@@ -13,6 +13,11 @@ would scan every chunk. Each adapter instead implements the operations below wit
 atomics (SQL transactions, Redis Lua, ...), and the conformance kit in :mod:`bitdrop_api.testing`
 pins the semantics identically for all of them.
 
+Besides the chunks, a store keeps one *plan* per job: the bytes that describe the schema and the
+list of chunks (see :mod:`bitdrop_api.plan`). The store never looks inside them. Saving the plan
+before registering the chunks lets a job resume from exactly the chunks it started with, and lets
+workers in other processes read the same list.
+
 Two mechanisms make crashes harmless:
 
 * **Leases.** A claim is valid for a limited time and must be renewed with ``heartbeat``. If the
@@ -135,6 +140,27 @@ class MetadataStore(Protocol):
         Raises:
             InvalidKey: a job id or chunk id breaks the key rules.
             ValueError: ``max_attempts`` is less than 1.
+        """
+        ...
+
+    async def save_plan(self, job_id: str, plan: bytes) -> bytes:
+        """Keep ``plan`` as the plan of ``job_id`` unless the job has one; return the plan kept.
+
+        The first save wins; a later save changes nothing and returns the plan already stored. Two
+        masters that plan the same job at the same moment therefore end up with one plan, each
+        using the bytes this call returns. The bytes are stored and returned exactly as given.
+        Saving a plan registers no chunks.
+
+        Raises:
+            InvalidKey: ``job_id`` breaks the key rules.
+        """
+        ...
+
+    async def load_plan(self, job_id: str) -> bytes | None:
+        """Return the plan saved for ``job_id``, or ``None`` if there is none.
+
+        Raises:
+            InvalidKey: ``job_id`` breaks the key rules.
         """
         ...
 

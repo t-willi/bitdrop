@@ -78,6 +78,12 @@ class TestMetadataStoreProtocol:
             async def register_chunks(self, *args: object, **kwargs: object) -> int:
                 return 0
 
+            async def save_plan(self, *args: object, **kwargs: object) -> bytes:
+                return b""
+
+            async def load_plan(self, *args: object, **kwargs: object) -> bytes | None:
+                return None
+
             async def claim(self, *args: object, **kwargs: object) -> Claim | None:
                 return None
 

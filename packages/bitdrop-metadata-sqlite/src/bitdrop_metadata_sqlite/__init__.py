@@ -46,6 +46,12 @@ CREATE TABLE IF NOT EXISTS chunks (
     last_error    TEXT,
     PRIMARY KEY (job_id, chunk_id)
 );
+-- One saved plan per job, kept as the exact bytes it was given. A database made before plans
+-- existed gains this table when opened, so the schema version stays 1.
+CREATE TABLE IF NOT EXISTS plans (
+    job_id TEXT PRIMARY KEY,
+    plan   BLOB NOT NULL
+);
 -- Serves "next waiting chunk of a job" without scanning the job; rowid keeps registration order.
 CREATE INDEX IF NOT EXISTS chunks_by_state ON chunks (job_id, state);
 """
@@ -99,6 +105,33 @@ class SqliteMetadataStore:
                 [(job_id, chunk_id, ChunkState.PENDING, max_attempts) for chunk_id in chunk_ids],
             )
             return connection.total_changes - before
+
+        return await self._transaction(work)
+
+    async def save_plan(self, job_id: str, plan: bytes) -> bytes:
+        """Keep the first plan of a job; see :meth:`MetadataStore.save_plan`."""
+        validate_key(job_id)
+
+        def work(connection: sqlite3.Connection) -> bytes:
+            connection.execute(
+                "INSERT OR IGNORE INTO plans (job_id, plan) VALUES (?, ?)", (job_id, plan)
+            )
+            (kept,) = connection.execute(
+                "SELECT plan FROM plans WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            return bytes(kept)
+
+        return await self._transaction(work)
+
+    async def load_plan(self, job_id: str) -> bytes | None:
+        """Return the saved plan; see :meth:`MetadataStore.load_plan`."""
+        validate_key(job_id)
+
+        def work(connection: sqlite3.Connection) -> bytes | None:
+            row = connection.execute(
+                "SELECT plan FROM plans WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            return None if row is None else bytes(row[0])
 
         return await self._transaction(work)
 

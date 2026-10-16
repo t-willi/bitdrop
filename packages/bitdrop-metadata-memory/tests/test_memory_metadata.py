@@ -19,6 +19,16 @@ class FakeClock:
         self.now += seconds
 
 
+class TestClosing:
+    async def test_closing_forgets_the_plan_with_everything_else(self) -> None:
+        store = MemoryMetadataStore()
+        await store.save_plan("job", b"the plan")
+
+        await store.aclose()
+
+        assert await store.load_plan("job") is None
+
+
 class TestLeasesWithAFakeClock:
     async def test_a_lease_expires_exactly_at_its_deadline(self) -> None:
         clock = FakeClock()

@@ -55,6 +55,42 @@ class TestPersistence:
         assert (await second.get_chunk("job", "a")).state is ChunkState.EXTRACTED
         await second.aclose()
 
+    async def test_a_saved_plan_survives_reopening_the_database(self, tmp_path: Path) -> None:
+        path = tmp_path / "metadata.db"
+        first = SqliteMetadataStore(path)
+        await first.save_plan("job", b"the plan")
+        await first.aclose()
+
+        second = SqliteMetadataStore(path)
+
+        assert await second.load_plan("job") == b"the plan"
+        assert await second.save_plan("job", b"another plan") == b"the plan"
+        await second.aclose()
+
+    async def test_a_database_made_before_plans_existed_gains_the_table(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "metadata.db"
+        with sqlite3.connect(path) as connection:
+            connection.executescript(
+                "CREATE TABLE chunks (job_id TEXT NOT NULL, chunk_id TEXT NOT NULL,"
+                " state TEXT NOT NULL, max_attempts INTEGER NOT NULL,"
+                " failures INTEGER NOT NULL DEFAULT 0, fence INTEGER NOT NULL DEFAULT 0,"
+                " worker_id TEXT, lease_expires REAL, last_error TEXT,"
+                " PRIMARY KEY (job_id, chunk_id));"
+                "INSERT INTO chunks (job_id, chunk_id, state, max_attempts)"
+                " VALUES ('job', 'a', 'pending', 3);"
+                "PRAGMA user_version = 1;"
+            )
+        connection.close()
+
+        store = SqliteMetadataStore(path)
+
+        assert await store.load_plan("job") is None
+        assert await store.save_plan("job", b"plan") == b"plan"
+        assert (await store.counts("job"))[ChunkState.PENDING] == 1
+        await store.aclose()
+
     async def test_missing_parent_directories_are_created(self, tmp_path: Path) -> None:
         path = tmp_path / "does" / "not" / "exist" / "metadata.db"
 
@@ -97,6 +133,21 @@ class TestSeveralProcessesOnOneFile:
         assert sorted(taken_by_first + taken_by_second) == chunk_ids
         await first.aclose()
         await second.aclose()
+
+
+class TestSeveralInstancesAgreeOnThePlan:
+    async def test_two_instances_planning_at_once_end_with_one_plan(self, tmp_path: Path) -> None:
+        path = tmp_path / "metadata.db"
+        stores = [SqliteMetadataStore(path), SqliteMetadataStore(path)]
+
+        answers = await asyncio.gather(
+            *(store.save_plan("job", f"plan from {i}".encode()) for i, store in enumerate(stores))
+        )
+
+        assert answers[0] == answers[1]
+        assert await stores[0].load_plan("job") == await stores[1].load_plan("job") == answers[0]
+        for store in stores:
+            await store.aclose()
 
 
 class TestLeasesWithAFakeClock:

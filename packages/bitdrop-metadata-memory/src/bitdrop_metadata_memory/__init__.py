@@ -63,6 +63,7 @@ class MemoryMetadataStore:
         """Create an empty store. ``clock`` (seconds) is injectable so tests can control time."""
         self._clock = clock
         self._jobs: dict[str, _Job] = {}
+        self._plans: dict[str, bytes] = {}
 
     async def register_chunks(
         self, job_id: str, chunk_ids: Sequence[str], *, max_attempts: int = DEFAULT_MAX_ATTEMPTS
@@ -82,6 +83,16 @@ class MemoryMetadataStore:
                 job.by_state[ChunkState.PENDING][chunk_id] = None
                 added += 1
         return added
+
+    async def save_plan(self, job_id: str, plan: bytes) -> bytes:
+        """Keep the first plan of a job; see :meth:`MetadataStore.save_plan`."""
+        validate_key(job_id)
+        return self._plans.setdefault(job_id, plan)
+
+    async def load_plan(self, job_id: str) -> bytes | None:
+        """Return the saved plan; see :meth:`MetadataStore.load_plan`."""
+        validate_key(job_id)
+        return self._plans.get(job_id)
 
     async def claim(
         self, job_id: str, stage: Stage, *, worker_id: str, lease_seconds: float
@@ -170,6 +181,7 @@ class MemoryMetadataStore:
     async def aclose(self) -> None:
         """Forget everything."""
         self._jobs.clear()
+        self._plans.clear()
 
     def _held(self, claim: Claim) -> tuple[_Job, _Chunk]:
         """Return the chunk the claim refers to, or raise ``LeaseLost`` if it is no longer valid.
