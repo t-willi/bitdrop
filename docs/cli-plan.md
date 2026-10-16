@@ -1,6 +1,6 @@
 # The CLI and the TUI: plan
 
-Agreed with the user on 2026-10-16. This is the plan for backlog item 1 of [agent-log.md](agent-log.md): a command
+Agreed with the user on 2026-10-16 and built the same day (all six steps are done; see the status list at the end). This is the plan for backlog item 1 of [agent-log.md](agent-log.md): a command
 line tool (`bitdrop`) with a live terminal UI (TUI). It records what was found while reading the code, the order of
 work, and the decisions, so a later session can continue where this one stopped.
 
@@ -68,4 +68,4 @@ Updated as the work proceeds; see the agent log for the authoritative state.
 - [x] 3 CLI
 - [x] 4 end-to-end through the CLI
 - [x] 5 TUI
-- [ ] 6 documentation and guards
+- [x] 6 documentation and guards

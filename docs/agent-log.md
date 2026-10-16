@@ -25,7 +25,8 @@ large bursts, so a huge full load finishes fast and cheaply.
 
 ```bash
 make sync        # install (uv; Python 3.14)
-make test-fast   # ~700 tests, no Docker, about 5 seconds
+make test-fast   # ~1,000 tests, no Docker, about 15 seconds
+make demo        # watch a demo job in the TUI (no database, no Docker)
 make check       # lint + strict types + architecture rules + every test (needs Docker for ~300 of them)
 ```
 
@@ -34,30 +35,35 @@ Their standing instructions are in section 7.
 
 ## 2. Current state
 
-Everything below is committed and passes `make check`. At the last full run: **1,002 tests collected, 979 passed, 23
-skipped** (the skips are intentional: kit checks that do not apply to a given adapter), **297 of them need Docker**.
-Last feature commit: `5425f67`.
+Everything below is committed and passes `make check`. At the last full run: **1,312 tests collected, 1,289 passed, 23
+skipped** (the skips are intentional: kit checks that do not apply to a given adapter), **299 of them need Docker**.
+Last feature commit: `577aaaa`.
 
 | Piece | Package / path | State |
 |---|---|---|
-| Contracts and conformance kits | `bitdrop-api` | `ChunkStore`, `MetadataStore`, `Source`, `Destination`, `ChunkCodec`, errors, key rule, URL parsing, Arrow native-type metadata; kits in `bitdrop_api.testing` |
-| Core | `bitdrop-core` | `registry.py` (opens components by URL via entry points), `transfer.py` (`run_transfer`: planner, extractors, loaders, reaper, heartbeats, timeouts, backpressure), `codec.py` (Arrow IPC, none/lz4/zstd) |
+| Contracts and conformance kits | `bitdrop-api` | `ChunkStore`, `MetadataStore` (with `release`), `Source`, `Destination`, `ChunkCodec`, errors, key rule, URL parsing, Arrow native-type metadata; kits in `bitdrop_api.testing` |
+| Core | `bitdrop-core` | `registry.py` (opens components by URL, displays by name, via entry points), `transfer.py` (`run_transfer`: planner, extractors, loaders, reaper, heartbeats, timeouts, backpressure, clean stop, progress observer), `progress.py` (events), `tracker.py` (events to display state), `ui.py` (`ProgressUi` contract), `summary.py`, `humanize.py`, `codec.py` (Arrow IPC, none/lz4/zstd) |
 | Chunk stores | `bitdrop-store-memory`, `bitdrop-store-file`, `bitdrop-store-redis` | `memory://`, `file:///dir` (use a tmpfs for RAM), `redis://` (Redis, Valkey, Dragonfly; same kit passes on all three) |
 | Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host) |
-| Connectors | `bitdrop-connector-memory`, `bitdrop-connector-postgres` | `memory://` source+destination; `postgresql://` source (primary-key range splitting) and destination (ledger, native types) |
-| Command line | `bitdrop-cli` | the `bitdrop` command: `run`, `plan`, `status`, `components`; TOML job file; plain and JSON-lines progress; exit codes; Ctrl-C and SIGTERM hand chunks back |
-| Terminal UI | `bitdrop-tui` | a live Textual screen for a running job, selected with `--ui tui` (in progress) |
-| Cross-package tests | `tests/integration`, `tests/e2e`, `tests/architecture` | swap tests, runner with injected faults, real PostgreSQL to PostgreSQL, architecture rules, this log's checks |
+| Connectors | `bitdrop-connector-memory`, `bitdrop-connector-postgres` | `memory://` source+destination (`demo_rows`, `delay_ms`: a generated table and slow chunks, so no database is needed); `postgresql://` source (primary-key range splitting) and destination (ledger, native types) |
+| Command line | `bitdrop-cli` | the `bitdrop` command: `run`, `plan`, `status`, `components`; strict TOML job file with `${ENV}` in URLs; `plain` and `json` displays; exit codes 0/1/2/3/70/130; Ctrl-C and SIGTERM hand chunks back |
+| Terminal UI | `bitdrop-tui` | a live Textual screen (progress and estimate, rows/s sparklines, staging fill, chunk map, workers, events); `q`, Ctrl-C, or SIGTERM stop the job cleanly; the default on a terminal |
+| Cross-package tests | `tests/integration`, `tests/e2e`, `tests/architecture` | swap tests, runner with injected faults and clean stops, real PostgreSQL to PostgreSQL (also through the `bitdrop` command, with a Ctrl-C and a resume), architecture rules, this log's checks |
+| Examples | `examples/demo.toml` | a job that needs no database; checked by a test, so it cannot rot |
 | Benchmarks | `benchmarks/test_chunk_store_throughput.py` | `make bench`: chunk store throughput table |
-| Tooling | `scripts/mutation_check.sh`, `scripts/add_workspace_package.py` | break-the-code-on-purpose check; register a new workspace package |
+| Tooling | `scripts/mutation_check.sh`, `scripts/add_workspace_package.py` | break-the-code-on-purpose check (stops a hanging run); register a new workspace package (`--top` for front ends; tested against the real pyproject) |
 
 **Verified end to end** (real PostgreSQL containers; a fingerprint of every row plus the column types match on both
 sides): a 200,000-row, 13-column table in about 0.4 s (roughly 500k rows/s); 26 column types bit for bit; a loader
 killed after its commit; a run killed halfway and resumed; the staging server wiped mid-job; staging in Redis, Valkey,
-and Dragonfly. Details and numbers: `docs/ideation.md`, section 12.
+and Dragonfly; the `bitdrop` command between two PostgreSQL databases, including a load stopped part-way with Ctrl-C
+and finished by the same command (no duplicate row, nothing left held). Details and numbers: `docs/ideation.md`,
+section 12.
 
-**What the user can run:** `uv run pytest tests/e2e -s` (end-to-end with throughput printed), `make bench`.
-A transfer is also a `bitdrop run job.toml` away (see `docs/cli-plan.md`; the TUI is still to come).
+**What the user can run:** `make demo` (the TUI, no database), `uv run bitdrop plan examples/demo.toml`,
+`uv run bitdrop run examples/demo.toml --ui plain`, `uv run bitdrop components`, `uv run pytest tests/e2e -s`
+(end-to-end with throughput printed), `make bench`. The plan and the findings behind the CLI and TUI are in
+`docs/cli-plan.md`.
 
 ## 3. Decisions
 
@@ -77,6 +83,14 @@ A transfer is also a `bitdrop run job.toml` away (see `docs/cli-plan.md`; the TU
 | 2026-10-16 | One adapter serves every Redis-protocol server; run them with persistence off and `noeviction` | The source is the durable copy; a snapshot fork can double memory; a full server should push back, not drop chunks |
 | 2026-10-16 | The loader deletes the staged blob before marking the chunk complete; all chunk store calls share `chunk_timeout` | Deleting after completion leaked blobs on a crash; a stalled connection would otherwise hang a worker whose heartbeat keeps its lease alive |
 | 2026-10-16 | The user allows committing without asking first | Their instruction; still run `make check` before every commit |
+| 2026-10-16 | `run_transfer` takes an optional observer that receives typed events; it only watches (an observer that raises is logged once and ignored) | One feed for every display; a broken UI must never change what reaches the destination |
+| 2026-10-16 | `MetadataStore.release(claim)` hands a chunk back without counting a failure; cancelling `run_transfer` releases every held chunk, including a claim granted while the worker was being cancelled | A stop used to leave leases (60 s by default) that blocked an immediate resume and cost one of three attempts each |
+| 2026-10-16 | Displays are components found by name (entry point group `bitdrop.uis`, contract `ProgressUi`); `bitdrop-cli` and `bitdrop-tui` are separate packages above the core that import no adapter and not each other | P1; role images never need a UI toolkit; adding a display changes no line of the command |
+| 2026-10-16 | Job configuration is a strict TOML file; URLs may contain `${NAME}`; no message repeats a value from the file; URLs in errors go through `redact_url` | Passwords stay out of files, logs, and tracebacks (Typer's rich tracebacks are off because they print locals) |
+| 2026-10-16 | Progress goes to standard error and the result to standard output; `--ui json` prints events on standard output; the runner's own log lines are not repeated by the displays | Scripts can pipe the result; no line is printed twice |
+| 2026-10-16 | Exit codes: 0 done, 1 chunks failed, 2 bad configuration, 3 refused by a component, 70 bug, 130 stopped | Schedulers and scripts can tell the outcomes apart |
+| 2026-10-16 | The TUI is a live monitor first; the setup wizard, live worker knobs, and attaching to another process's job wait for their prerequisites (see the backlog) | Each needs a contract or governor that does not exist yet |
+| 2026-10-16 | Demo data lives in the memory connector (`demo_rows`, `delay_ms`), not in a new package or in the CLI | The CLI may not name a connector; this keeps the demo and the CLI tests free of Docker |
 
 ## 4. Session history
 
@@ -92,7 +106,13 @@ A transfer is also a `bitdrop run job.toml` away (see `docs/cli-plan.md`; the TU
 | 2026-10-16 | `180202b` | PostgreSQL connector (ADBC), tested against a real PostgreSQL in Docker |
 | 2026-10-16 | `95fe6c3` | End-to-end PostgreSQL to PostgreSQL tests; found the NULL-array-element driver bug; P2 |
 | 2026-10-16 | `5425f67` | Redis-protocol chunk store (Redis, Valkey, Dragonfly); timeouts for chunk store calls; blob-leak fix; benchmark |
-| 2026-10-16 | this commit | Agent log, `CLAUDE.md`, helper scripts |
+| 2026-10-16 | `fdead4c` | Agent log, `CLAUDE.md`, helper scripts |
+| 2026-10-16 | `60de219` | Progress events and observer in `run_transfer`; `docs/cli-plan.md` |
+| 2026-10-16 | `f44c4dd` | `MetadataStore.release`; a cancelled run hands its chunks back |
+| 2026-10-16 | `7e300a9` | `JobTracker`, number formatting, the `ProgressUi` contract and registry lookup; demo data and delays in the memory connector; public `redact_url` |
+| 2026-10-16 | `74e6e69` | The `bitdrop` command; found and fixed the lost late claim with a real-process signal test |
+| 2026-10-16 | `577aaaa` | The TUI, `examples/demo.toml`, real-database tests of the command, tooling fixes |
+| 2026-10-16 | this commit | Agent log and docs for the CLI and TUI |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of
@@ -104,16 +124,26 @@ Nothing here is started unless marked. Roughly in the order I would do it.
 
 **Next up**
 
-1. **CLI and job config file** (for example `bitdrop run job.toml`). The runner is only a function today.
-2. **Persist the chunk plan** (the `ChunkSpec` payloads are already JSON-friendly) in the metadata store, so
+1. **Persist the chunk plan** (the `ChunkSpec` payloads are already JSON-friendly) in the metadata store, so
    extractors and loaders can run as separate processes or containers. Today `run_transfer` keeps the plan in its own
    memory.
-3. **Role entry points and containers**: one image per role (master, extractor, loader), Kubernetes manifests. P1 says
+2. **Role entry points and containers**: one image per role (master, extractor, loader), Kubernetes manifests. P1 says
    every function gets its own container; none exists yet.
-4. **Memory governor**: byte-credit admission control, a hard `maxmemory` backstop, scaling workers. Today only simple
+3. **Memory governor**: byte-credit admission control, a hard `maxmemory` backstop, scaling workers. Today only simple
    backpressure exists (an extractor waits while the staging store is full). The `Governor` and `Provisioner` contracts
    listed in `docs/principles.md` are not built.
-5. **A networked `MetadataStore`** (Redis and/or PostgreSQL) for multi-host runs; SQLite is single-host.
+4. **A networked `MetadataStore`** (Redis and/or PostgreSQL) for multi-host runs; SQLite is single-host.
+
+**CLI and TUI follow-ups** (each waits for the item named)
+
+- A setup wizard that browses tables and writes the job file: needs `Source.list_tables` in the contract, both
+  connectors, and the kit.
+- Attach the TUI to a job run by another process (`bitdrop watch`): needs rows and bytes in the metadata store and the
+  persisted plan (item 1 above).
+- Change worker counts while running: needs the memory governor (item 3).
+- `bitdrop status` shows counts only; listing the failed chunks needs a list-by-state operation on `MetadataStore`.
+- Windows: signal handling falls back silently (no handlers), untested. The TUI was tested headless and in a
+  pseudo-terminal on macOS only.
 
 **Connectors and stores**
 
@@ -127,7 +157,7 @@ Nothing here is started unless marked. Roughly in the order I would do it.
 
 **Operations**
 
-- Structured logging, progress and metrics, per-chunk timings.
+- Metrics and per-chunk timings (progress events exist; logging is still plain text).
 - A verification step inside the runner (row counts and checksums per chunk); today verification lives in the e2e tests.
 - Incremental sync and CDC (out of scope so far).
 
@@ -136,7 +166,8 @@ estimator on wide-column data, H5 pod-local tmpfs versus a dedicated store, H6 c
 client processes over a real network. H1 is only answered for one client on one machine.
 
 **Questions for the user** (decide before the work that depends on them): which database after PostgreSQL? Where will
-it run (Kubernetes, which cloud)? CLI and config style? Open source or product (license, Redis versus Valkey)?
+it run (Kubernetes, which cloud)? Open source or product (license, Redis versus Valkey)? (CLI and config style was
+decided: TOML job file, Typer, Textual; see `docs/cli-plan.md`.)
 
 ## 6. Known limitations
 
@@ -152,6 +183,13 @@ it run (Kubernetes, which cloud)? CLI and config style? Open source or product (
 - The plan exists only inside the running process (see backlog item 2); a restart re-plans, which is only safe if the
   table is unchanged.
 - Throughput numbers come from one laptop with local containers; they say nothing about network-bound performance.
+- Resuming needs a metadata store that survives the process (`sqlite://`); with `memory://` a stopped job cannot be
+  continued. The command says so when it stops.
+- A stop does not interrupt a call that already runs in a thread: a PostgreSQL `COPY` under way finishes (and commits)
+  before the process exits. The chunk is handed back and the next run skips it through the destination ledger.
+- The TUI's chunk map and worker table are built from events, so a lease voided by the reaper shows only when the chunk
+  is started again; the counts come from the metadata store and are authoritative.
+- `bitdrop status` shows counts only, not which chunks failed.
 
 ## 7. Working rules
 
@@ -170,7 +208,7 @@ These come from the user and from lessons in this project.
 - **Never touch Docker containers the tests did not start.** The user's machine runs other containers.
 - **No secrets in messages**: URLs are redacted (`***`) in every error.
 - To add a package: create it like an existing one, then `uv run python scripts/add_workspace_package.py <dist> <module>`
-  and `uv sync`; the remaining steps are in `docs/development.md`.
+  (`--top` for a front end) and `uv sync`; the remaining steps are in `docs/development.md`.
 
 ## 8. Gotchas
 
@@ -193,6 +231,23 @@ These come from the user and from lessons in this project.
   restore the original value instead of `0`; run test servers with persistence off. Images are pinned in `conftest.py`.
 - **Docker**: containers use random ports and are removed at the end of the session; `docker` tests are skipped, not
   failed, when Docker is unavailable. `testcontainers` is imported as `testcontainers.community.*`.
+- **mypy and test names**: pytest tolerates two `test_app.py` in different packages, mypy does not ("duplicate module");
+  give test files unique names across the repository.
+- **Backend-name scan**: string literals count as code, so CLI help text and messages must not spell a backend
+  (`postgresql`, `sqlite`, ...). Examples belong in docstrings and docs. `bitdrop_cli` and `bitdrop_tui` are scanned.
+- **Textual**: `run_async` swallows a cancellation, so `asyncio.wait_for` cannot make a stuck screen fail a test; use a
+  clock and `pytest.fail` (see `present_promptly` in `packages/bitdrop-tui/tests/test_screen.py`). The test pilot's
+  `auto_pilot` does not close the app when it returns. Read a panel's text with `Static.content` and a log with
+  `RichLog.lines`.
+- **Signals**: only a test that sends a real signal to a real process found that a claim granted during cancellation
+  was lost (`packages/bitdrop-cli/tests/test_signals.py`); in-process cancellation tests cannot.
+- **Mutation checks can hang**: a mutant that breaks shutdown makes the run hang; `mutation_check.sh` now stops it after
+  `MUTATION_TIMEOUT` seconds and counts it as killed. Do not run several mutants in one foreground command.
+- **zsh** stops a command chain when a glob matches nothing (`rm -f x*`); avoid globs in `&&` chains.
+- **pydantic** errors can carry the offending input; the job file formatter prints only the location and the message, and
+  the model is configured to hide inputs as a second layer.
+- **Observed once, not explained**: the Valkey 16 MiB round trip of the Redis conformance kit failed once in a full
+  `make check` and passed on every rerun.
 - **Timing tests** use real, very short leases and sleeps. Loops in kits are bounded so a broken implementation fails
   instead of hanging.
 - **Memory of the agent**: the assistant's private memory is machine-local and holds only the working style. This file
