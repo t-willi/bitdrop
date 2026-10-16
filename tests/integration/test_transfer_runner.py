@@ -479,6 +479,7 @@ class TestConfigValidation:
             {"chunk_timeout": 0},
             {"backpressure_timeout": 0},
             {"reaper_interval": 0},
+            {"progress_interval": 0},
         ],
     )
     def test_nonsense_numbers_are_rejected(self, overrides: dict[str, object]) -> None:

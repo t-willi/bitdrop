@@ -41,6 +41,15 @@ from bitdrop_api.metadata_store import (
 )
 from bitdrop_api.source import ChunkSpec, Source, SourcePlan
 from bitdrop_core.codec import ArrowIpcCodec
+from bitdrop_core.progress import (
+    ChunkFailed,
+    ChunkFinished,
+    ChunkStarted,
+    Notifier,
+    PlanReady,
+    Snapshot,
+    TransferObserver,
+)
 
 __all__ = ["TransferConfig", "TransferReport", "run_transfer"]
 
@@ -95,6 +104,9 @@ class TransferConfig:
     reaper_interval: float = 1.0
     """How often leases of dead workers are voided."""
 
+    progress_interval: float = 0.25
+    """How often an observer receives a :class:`~bitdrop_core.progress.Snapshot`."""
+
     def __post_init__(self) -> None:
         """Reject impossible settings early."""
         validate_key(self.job_id)
@@ -110,6 +122,7 @@ class TransferConfig:
             "backpressure_timeout",
             "poll_interval",
             "reaper_interval",
+            "progress_interval",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive, got {getattr(self, name)}")
@@ -153,6 +166,15 @@ class _Stats:
     bytes_staged: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _Outcome:
+    """What a worker did with a chunk, for the statistics and the observer."""
+
+    rows: int
+    bytes: int
+    already_loaded: bool = False
+
+
 async def run_transfer(
     source: Source,
     destination: Destination,
@@ -161,13 +183,18 @@ async def run_transfer(
     config: TransferConfig,
     *,
     codec: ChunkCodec | None = None,
+    observer: TransferObserver | None = None,
 ) -> TransferReport:
     """Transfer ``config.source_table`` into ``config.destination_table`` and report the result.
 
     Chunks that fail for good do not abort the run; they are listed in the report. Planning errors
     (unknown table, unsupported column type) propagate before anything is moved.
+
+    ``observer`` receives progress events (see :mod:`bitdrop_core.progress`). It only watches: if it
+    raises, the transfer carries on.
     """
     started = time.monotonic()
+    notify = Notifier(observer, _LOG)
     target = _effective_target(config, chunk_store)
     plan = await source.plan(
         config.source_table, target_chunk_bytes=target, split_column=config.split_column
@@ -180,6 +207,22 @@ async def run_transfer(
         [chunk.chunk_id for chunk in plan.chunks],
         max_attempts=config.max_attempts,
     )
+    if notify.enabled:
+        notify(
+            PlanReady(
+                job_id=config.job_id,
+                source_table=config.source_table,
+                destination_table=config.destination_table,
+                chunk_ids=tuple(chunk.chunk_id for chunk in plan.chunks),
+                columns=tuple((field.name, str(field.type)) for field in plan.schema),
+                estimated_rows=plan.estimated_rows,
+                estimated_row_bytes=plan.estimated_row_bytes,
+                notes=plan.notes,
+                extractors=config.extractors,
+                loaders=config.loaders,
+                max_attempts=config.max_attempts,
+            )
+        )
     _LOG.info(
         "job %s: %d chunks of about %d bytes from %s",
         config.job_id,
@@ -189,9 +232,19 @@ async def run_transfer(
     )
 
     transfer = _Transfer(
-        source, destination, chunk_store, metadata_store, codec or ArrowIpcCodec(), config, plan
+        source,
+        destination,
+        chunk_store,
+        metadata_store,
+        codec or ArrowIpcCodec(),
+        config,
+        plan,
+        notify,
+        started,
     )
     await transfer.run()
+    if notify.enabled:
+        notify(await transfer.snapshot())  # the last word: it agrees with the report below
     report = await transfer.report(time.monotonic() - started)
     _LOG.info(
         "job %s: %d/%d chunks loaded, %d failed, %d rows in %.2fs",
@@ -224,6 +277,8 @@ class _Transfer:
         codec: ChunkCodec,
         config: TransferConfig,
         plan: SourcePlan,
+        notify: Notifier,
+        started: float,
     ) -> None:
         self._source = source
         self._destination = destination
@@ -234,6 +289,8 @@ class _Transfer:
         self._plan = plan
         self._specs: dict[str, ChunkSpec] = {chunk.chunk_id: chunk for chunk in plan.chunks}
         self._stats = _Stats()
+        self._notify = notify
+        self._started = started
 
     # -- orchestration --------------------------------------------------------------------------
 
@@ -252,6 +309,7 @@ class _Transfer:
                 for i in range(cfg.loaders)
             ),
             asyncio.create_task(self._reap()),
+            *([asyncio.create_task(self._publish())] if self._notify.enabled else []),
         ]
         supervisor = asyncio.create_task(self._wait_until_finished())
         try:
@@ -302,6 +360,38 @@ class _Transfer:
             await self._meta.release_expired(self._config.job_id)
             await asyncio.sleep(self._config.reaper_interval)
 
+    async def _publish(self) -> None:
+        """Tell the observer where the job stands, over and over. A display is not worth a crash."""
+        while True:
+            try:
+                self._notify(await self.snapshot())
+            except Exception:
+                _LOG.debug("could not take a progress snapshot", exc_info=True)
+            await asyncio.sleep(self._config.progress_interval)
+
+    async def snapshot(self) -> Snapshot:
+        """Describe the job right now: chunk counts, totals, and how full staging is."""
+        counts = await self._meta.counts(self._config.job_id)
+        used = capacity = None
+        try:
+            async with asyncio.timeout(self._config.chunk_timeout):
+                stats = await self._chunks.stats()
+        except Exception:  # staging figures are decoration; the counts are what matter
+            stats = None
+        if stats is not None:
+            used, capacity = stats.used_bytes, stats.max_bytes
+        return Snapshot(
+            job_id=self._config.job_id,
+            elapsed_seconds=time.monotonic() - self._started,
+            counts=dict(counts),
+            rows_extracted=self._stats.rows_extracted,
+            rows_loaded=self._stats.rows_loaded,
+            duplicates_skipped=self._stats.duplicates_skipped,
+            bytes_staged=self._stats.bytes_staged,
+            staging_used_bytes=used,
+            staging_max_bytes=capacity,
+        )
+
     # -- workers --------------------------------------------------------------------------------
 
     async def _work(self, stage: Stage, name: str) -> None:
@@ -317,11 +407,13 @@ class _Transfer:
                 continue
             await self._process(claim, handler)
 
-    async def _process(self, claim: Claim, handler: Callable[[Claim], Awaitable[None]]) -> None:
+    async def _process(self, claim: Claim, handler: Callable[[Claim], Awaitable[_Outcome]]) -> None:
         """Run ``handler`` for the claim while keeping its lease alive; report any failure."""
+        began = time.monotonic()
+        self._notify(ChunkStarted(claim.chunk_id, claim.stage, claim.worker_id))
         async with self._keep_alive(claim):
             try:
-                await handler(claim)
+                outcome = await handler(claim)
             except LeaseLost:
                 _LOG.info(
                     "%s: lease lost on chunk %s; the new owner takes over",
@@ -330,6 +422,18 @@ class _Transfer:
                 )
             except Exception as error:
                 await self._fail(claim, error)
+            else:
+                self._notify(
+                    ChunkFinished(
+                        chunk_id=claim.chunk_id,
+                        stage=claim.stage,
+                        worker=claim.worker_id,
+                        rows=outcome.rows,
+                        bytes=outcome.bytes,
+                        seconds=time.monotonic() - began,
+                        already_loaded=outcome.already_loaded,
+                    )
+                )
 
     async def _fail(self, claim: Claim, error: Exception) -> None:
         reason = (
@@ -340,8 +444,23 @@ class _Transfer:
         # A loader that finds the blob missing or unreadable needs the chunk extracted again.
         reextract = claim.stage is Stage.LOAD and isinstance(error, ChunkNotFound | CorruptChunk)
         _LOG.warning("chunk %s (%s) failed: %s", claim.chunk_id, claim.stage, reason)
-        with suppress(LeaseLost):
+        try:
             await self._meta.fail(claim, reason, reextract=reextract)
+        except LeaseLost:
+            return  # someone else owns the chunk now; this attempt no longer counts
+        if self._notify.enabled:
+            with suppress(Exception):  # telling the observer must never add a failure of its own
+                record = await self._meta.get_chunk(claim.job_id, claim.chunk_id)
+                self._notify(
+                    ChunkFailed(
+                        chunk_id=claim.chunk_id,
+                        stage=claim.stage,
+                        worker=claim.worker_id,
+                        reason=reason,
+                        failures=record.failures,
+                        final=record.state is ChunkState.FAILED,
+                    )
+                )
 
     @asynccontextmanager
     async def _keep_alive(self, claim: Claim) -> AsyncIterator[None]:
@@ -363,7 +482,7 @@ class _Transfer:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
 
-    async def _extract(self, claim: Claim) -> None:
+    async def _extract(self, claim: Claim) -> _Outcome:
         cfg = self._config
         async with asyncio.timeout(cfg.chunk_timeout):
             table = await self._source.read_chunk(self._plan, self._specs[claim.chunk_id])
@@ -372,6 +491,7 @@ class _Transfer:
         await self._meta.complete(claim)
         self._stats.rows_extracted += table.num_rows
         self._stats.bytes_staged += len(data)
+        return _Outcome(rows=table.num_rows, bytes=len(data))
 
     async def _stage(self, key: str, data: bytes) -> None:
         """Put the blob in the chunk store, waiting for loaders to free space if it is full."""
@@ -386,7 +506,7 @@ class _Transfer:
                     raise
                 await asyncio.sleep(self._config.poll_interval)
 
-    async def _load(self, claim: Claim) -> None:
+    async def _load(self, claim: Claim) -> _Outcome:
         cfg = self._config
         key = self._blob_key(claim.chunk_id)
         async with asyncio.timeout(cfg.chunk_timeout):
@@ -406,6 +526,7 @@ class _Transfer:
         async with asyncio.timeout(cfg.chunk_timeout):
             await self._chunks.delete(key)
         await self._meta.complete(claim)
+        return _Outcome(rows=written.rows, bytes=len(data), already_loaded=written.already_loaded)
 
     def _blob_key(self, chunk_id: str) -> str:
         return f"{self._config.job_id}:{chunk_id}"
