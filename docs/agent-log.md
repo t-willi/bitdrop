@@ -35,20 +35,20 @@ Their standing instructions are in section 7.
 
 ## 2. Current state
 
-Everything below is committed and passes `make check`. At the last full run: **1,312 tests collected, 1,289 passed, 23
-skipped** (the skips are intentional: kit checks that do not apply to a given adapter), **299 of them need Docker**.
-Last feature commit: `577aaaa`.
+Everything below is committed and passes `make check`. At the last full run: **1,390 tests collected, 1,367 passed, 23
+skipped** (the skips are intentional: kit checks that do not apply to a given adapter), **300 of them need Docker**.
+Last feature commit: `af1fbd7`.
 
 | Piece | Package / path | State |
 |---|---|---|
-| Contracts and conformance kits | `bitdrop-api` | `ChunkStore`, `MetadataStore` (with `release`), `Source`, `Destination`, `ChunkCodec`, errors, key rule, URL parsing, Arrow native-type metadata; kits in `bitdrop_api.testing` |
-| Core | `bitdrop-core` | `registry.py` (opens components by URL, displays by name, via entry points), `transfer.py` (`run_transfer`: planner, extractors, loaders, reaper, heartbeats, timeouts, backpressure, clean stop, progress observer), `progress.py` (events), `tracker.py` (events to display state), `ui.py` (`ProgressUi` contract), `summary.py`, `humanize.py`, `codec.py` (Arrow IPC, none/lz4/zstd) |
+| Contracts and conformance kits | `bitdrop-api` | `ChunkStore`, `MetadataStore` (with `release` and the saved plan: `save_plan`, `load_plan`), `Source`, `Destination`, `ChunkCodec`, errors, key rule, URL parsing, Arrow native-type metadata, `plan.py` (a source plan to bytes and back); kits in `bitdrop_api.testing` |
+| Core | `bitdrop-core` | `registry.py` (opens components by URL, displays by name, via entry points), `transfer.py` (`run_transfer`: saved plan, extractors, loaders, reaper, heartbeats, timeouts, backpressure, clean stop, progress observer), `progress.py` (events), `tracker.py` (events to display state), `ui.py` (`ProgressUi` contract), `summary.py`, `humanize.py`, `codec.py` (Arrow IPC, none/lz4/zstd) |
 | Chunk stores | `bitdrop-store-memory`, `bitdrop-store-file`, `bitdrop-store-redis` | `memory://`, `file:///dir` (use a tmpfs for RAM), `redis://` (Redis, Valkey, Dragonfly; same kit passes on all three) |
-| Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host) |
+| Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host; keeps the plan too) |
 | Connectors | `bitdrop-connector-memory`, `bitdrop-connector-postgres` | `memory://` source+destination (`demo_rows`, `delay_ms`: a generated table and slow chunks, so no database is needed); `postgresql://` source (primary-key range splitting) and destination (ledger, native types) |
 | Command line | `bitdrop-cli` | the `bitdrop` command: `run`, `plan`, `status`, `components`; strict TOML job file with `${ENV}` in URLs; `plain` and `json` displays; exit codes 0/1/2/3/70/130; Ctrl-C and SIGTERM hand chunks back |
 | Terminal UI | `bitdrop-tui` | a live Textual screen (progress and estimate, rows/s sparklines, staging fill, chunk map, workers, events); `q`, Ctrl-C, or SIGTERM stop the job cleanly; the default on a terminal |
-| Cross-package tests | `tests/integration`, `tests/e2e`, `tests/architecture` | swap tests, runner with injected faults and clean stops, real PostgreSQL to PostgreSQL (also through the `bitdrop` command, with a Ctrl-C and a resume), architecture rules, this log's checks |
+| Cross-package tests | `tests/integration`, `tests/e2e`, `tests/architecture` | swap tests, runner with injected faults and clean stops, the saved plan (resume, two masters at once), real PostgreSQL to PostgreSQL (also through the `bitdrop` command, with a Ctrl-C and a resume), architecture rules, this log's checks |
 | Examples | `examples/demo.toml` | a job that needs no database; checked by a test, so it cannot rot |
 | Benchmarks | `benchmarks/test_chunk_store_throughput.py` | `make bench`: chunk store throughput table |
 | Tooling | `scripts/mutation_check.sh`, `scripts/add_workspace_package.py` | break-the-code-on-purpose check (stops a hanging run); register a new workspace package (`--top` for front ends; tested against the real pyproject) |
@@ -92,6 +92,10 @@ section 12.
 | 2026-10-16 | Exit codes: 0 done, 1 chunks failed, 2 bad configuration, 3 refused by a component, 70 bug, 130 stopped | Schedulers and scripts can tell the outcomes apart |
 | 2026-10-16 | The TUI is a live monitor first; the setup wizard, live worker knobs, and attaching to another process's job wait for their prerequisites (see the backlog) | Each needs a contract or governor that does not exist yet |
 | 2026-10-16 | Demo data lives in the memory connector (`demo_rows`, `delay_ms`), not in a new package or in the CLI | The CLI may not name a connector; this keeps the demo and the CLI tests free of Docker |
+| 2026-10-16 | The metadata store keeps a job's plan as opaque bytes (`save_plan`: first writer wins and answers with the stored plan; `load_plan`); `bitdrop_api.plan` is the one place that knows the format (JSON, Arrow schema as base64 IPC, format number) | Adapters stay ignorant of Arrow and sources (P1); two masters planning at once must end with one plan; a person can read a saved plan |
+| 2026-10-16 | `run_transfer` uses a saved plan as it is and does not call `Source.plan`; the plan is saved before the chunks are registered; a job id saved for another table raises `PlanMismatch` (exit 3) | A resumed job must finish the chunks it started with, even if the table changed; a crash between the two writes leaves a plan and no chunks, which is harmless; chunk ids from two different plans would corrupt a job |
+| 2026-10-16 | A chunk payload must survive a JSON round trip exactly: encoding refuses a tuple, date, set, or non-text key; the source kit enforces it for every connector (P2) | JSON would silently turn a tuple into a list |
+| 2026-10-16 | The SQLite file gains a `plans` table through `CREATE TABLE IF NOT EXISTS`; the schema version stays 1 | Older files open and work; no migration step |
 
 ## 4. Session history
 
@@ -116,6 +120,13 @@ section 12.
 | 2026-10-16 | `b0cc9f6` | Agent log and docs for the CLI and TUI |
 | 2026-10-16 | `c202940` | Project instructions ask for small, frequent commits |
 | 2026-10-16 | `f194f46` | Plan for persisting the chunk plan, written into the log before any code |
+| 2026-10-16 | `b88275f` | Real hash for the CLI/TUI log update |
+| 2026-10-16 | `4ef5952` | `bitdrop_api.plan`: a source plan to bytes and back; `CorruptPlan` |
+| 2026-10-16 | `5003fd7` | Source kit: a saved plan must read the same table |
+| 2026-10-16 | `514ca63` | `MetadataStore.save_plan` / `load_plan` in the contract, the kit, and the memory and SQLite adapters |
+| 2026-10-16 | `af1fbd7` | `run_transfer` saves the plan and resumes from it; `PlanMismatch`; two masters at once |
+| 2026-10-16 | `d315945` | The command refuses a job id saved for another table; mutation checks recorded |
+| 2026-10-16 | this commit | Docs and agent log for the saved plan |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of
@@ -125,63 +136,32 @@ failing, a race test that caught a non-atomic write only 4 times in 5).
 
 Nothing here is started unless marked. Roughly in the order I would do it.
 
-**IN PROGRESS: persist the chunk plan** (backlog item 1). A session that finds this block continues at the first
-unticked step; tick a step in the same commit that finishes it. Every step is one commit that passes `make check`.
-
-Design (decided 2026-10-16):
-
-- The metadata store keeps the plan as **opaque bytes**, so adapters know nothing about Arrow or sources (P1).
-  Two new operations on `MetadataStore`: `save_plan(job_id, plan)` stores the bytes only if the job has none yet and
-  returns the bytes that are stored (first writer wins, so two masters cannot disagree); `load_plan(job_id)` returns
-  them, or `None`.
-- Turning a `SourcePlan` into bytes and back is `bitdrop_api.plan` (`encode_plan`, `decode_plan`): JSON with a format
-  version, the Arrow schema as base64 IPC (keeps field metadata, so native-type hints survive), the chunk specs, the
-  estimates, the notes. A payload that is not JSON is refused loudly at encode time (P2); garbage or an unknown version
-  raises `CorruptPlan`.
-- `run_transfer` first calls `load_plan`. If a plan is stored it is used and `Source.plan` is not called: a resumed job
-  reads exactly the chunks it registered, even if the table changed meanwhile. If the stored plan is for another source
-  table the run is refused (`PlanMismatch`: use a new job id). Otherwise it plans, calls `save_plan`, and uses what
-  `save_plan` returns. The plan is saved *before* `register_chunks`, so a crash between the two leaves a plan and no
-  chunks, which is harmless.
-- The source kit gains a check that every chunk payload survives a JSON round trip unchanged (tuples would silently
-  become lists otherwise).
-
-Steps:
-
-- [x] 0. This plan, committed first so a handover is always possible.
-- [x] 1. Housekeeping: section 4 says "this commit" for the CLI/TUI log update; give it its real hash and add `c202940`.
-- [x] 2. `bitdrop_api.plan` with tests: round trip (schema metadata, nested types, payloads, notes, estimates), garbage,
-      unknown version, non-JSON payload.
-- [x] 3. Source kit: payloads survive a JSON round trip; make sure both connectors pass.
-- [x] 4. `MetadataStore.save_plan` / `load_plan` in the contract, the kit, and the memory and SQLite adapters (one
-      commit: the kit tests fail for an adapter without them; watch them fail first).
-- [x] 5. `run_transfer` loads, saves, and resumes from the plan; integration tests: resume after the table changed uses
-      the saved chunks, another table is refused, no `Source.plan` call on resume.
-- [x] 6. Mutation checks (`scripts/mutation_check.sh`) on steps 2 to 5; strengthen tests for any survivor.
-- [ ] 7. Update this log (sections 2, 3, 4, 5, 6), `docs/development.md` if it lists contract methods; full `make check`
-      with Docker; set the test counts.
-
-Then continue with the rest of "Next up".
-
 **Next up**
 
-1. *(in progress, see above)* **Persist the chunk plan**, so extractors and loaders can run as separate processes or
-   containers. Today `run_transfer` keeps the plan in its own memory.
-2. **Role entry points and containers**: one image per role (master, extractor, loader), Kubernetes manifests. P1 says
-   every function gets its own container; none exists yet.
-3. **Memory governor**: byte-credit admission control, a hard `maxmemory` backstop, scaling workers. Today only simple
+1. **Role entry points and containers**: one image per role (master, extractor, loader), Kubernetes manifests. P1 says
+   every function gets its own container; none exists yet. The plan is in the metadata store now, so a worker can read
+   it; what is missing is a worker loop that takes a job id and the component URLs and runs without the master, and
+   something that decides when the job is over.
+2. **Memory governor**: byte-credit admission control, a hard `maxmemory` backstop, scaling workers. Today only simple
    backpressure exists (an extractor waits while the staging store is full). The `Governor` and `Provisioner` contracts
    listed in `docs/principles.md` are not built.
-4. **A networked `MetadataStore`** (Redis and/or PostgreSQL) for multi-host runs; SQLite is single-host.
+3. **A networked `MetadataStore`** (Redis and/or PostgreSQL) for multi-host runs; SQLite is single-host. It must
+   implement `save_plan` as an atomic set-if-absent (Redis `SET NX`, PostgreSQL `ON CONFLICT DO NOTHING`); the kit
+   checks two writers at once.
+4. **Start a job over**: a saved plan binds a job id to its table and its chunks, and nothing discards it yet. A
+   `MetadataStore` operation to forget a job (plan and chunks) plus a command (`bitdrop reset`, or `run --fresh`)
+   that also says what to do about the destination ledger. Today: use a new job id.
 
 **CLI and TUI follow-ups** (each waits for the item named)
 
 - A setup wizard that browses tables and writes the job file: needs `Source.list_tables` in the contract, both
   connectors, and the kit.
-- Attach the TUI to a job run by another process (`bitdrop watch`): needs rows and bytes in the metadata store and the
-  persisted plan (item 1 above).
+- Attach the TUI to a job run by another process (`bitdrop watch`): needs rows and bytes in the metadata store (the
+  persisted plan exists since 2026-10-16).
 - Change worker counts while running: needs the memory governor (item 3).
 - `bitdrop status` shows counts only; listing the failed chunks needs a list-by-state operation on `MetadataStore`.
+- `bitdrop plan` (the dry run) always asks the source; it does not show a plan already saved for the job id. It
+  could say "this job already has a saved plan of N chunks".
 - Windows: signal handling falls back silently (no handlers), untested. The TUI was tested headless and in a
   pseudo-terminal on macOS only.
 
@@ -220,8 +200,10 @@ decided: TOML job file, Typer, Textual; see `docs/cli-plan.md`.)
 - Destination tables are created without indexes or constraints.
 - Chunk sizes rely on `reltuples` (or a `count(*)` when never analysed) and a row-width sample; skewed data gives uneven
   chunks.
-- The plan exists only inside the running process (see backlog item 2); a restart re-plans, which is only safe if the
-  table is unchanged.
+- A job's plan is fixed when it first runs. A resumed job (same job id and metadata store) reads the chunks it started
+  with, so rows added to the source afterwards are not transferred by it, and `chunk_mib` or `split_column` changed in
+  the job file have no effect on it. A job id cannot be pointed at another table (`PlanMismatch`). Nothing discards a
+  saved plan yet: start over with a new job id.
 - Throughput numbers come from one laptop with local containers; they say nothing about network-bound performance.
 - Resuming needs a metadata store that survives the process (`sqlite://`); with `memory://` a stopped job cannot be
   continued. The command says so when it stops.
@@ -293,6 +275,14 @@ These come from the user and from lessons in this project.
   `make check` and passed on every rerun.
 - **Timing tests** use real, very short leases and sleeps. Loops in kits are bounded so a broken implementation fails
   instead of hanging.
+- **Adding a method to a contract** breaks every class that implements it, including test stubs: the registry test's
+  `StubMetadataStore` and the protocol test in `packages/bitdrop-api/tests` both implement `MetadataStore` by hand.
+  `grep -rn "async def release_expired" packages` finds all implementers of that one. The kit failing for an adapter
+  is the red phase; the stubs are not covered by it.
+- **A test that passes at once** (the CLI test for `PlanMismatch` did) proves nothing until a mutation breaks it:
+  remove the check in the runner and watch it fail.
+- **Trailing bytes**: the first version of the plan-bytes kit test ended in `0xFF`, so an adapter that trimmed trailing
+  NULs survived the mutation check. Binary tests need NULs at both ends.
 - **Memory of the agent**: the assistant's private memory is machine-local and holds only the working style. This file
   and the repository are the source of truth.
 - Temporary helper scripts written outside the repository are lost between sessions; keep anything reusable in `scripts/`.

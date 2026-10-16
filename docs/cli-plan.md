@@ -30,7 +30,7 @@ Out of scope for version 1, each with the prerequisite that already sits in the 
 |---|---|
 | Setup wizard that browses tables | `Source.list_tables` in the contract and both connectors |
 | Changing worker counts while running | The memory governor (agent-log backlog item 4) |
-| Attaching to a job run by another process | Rows and bytes in the metadata store, and the persisted plan (backlog item 2) |
+| Attaching to a job run by another process | Rows and bytes in the metadata store (the persisted plan exists since 2026-10-16) |
 
 ## Decisions
 

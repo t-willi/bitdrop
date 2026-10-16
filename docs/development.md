@@ -41,7 +41,8 @@ bitdrop/
 │   ├── bitdrop-api/          Contracts + shared types + the conformance kit. Depends on nothing.
 │   │   ├── src/bitdrop_api/
 │   │   │   ├── chunk_store.py    ChunkStore: where chunks wait in RAM (data plane)
-│   │   │   ├── metadata_store.py MetadataStore: chunk states, leases, fencing (coordination)
+│   │   │   ├── metadata_store.py MetadataStore: chunk states, leases, fencing, the saved plan (coordination)
+│   │   │   ├── plan.py           A source plan to bytes and back (what the metadata store keeps)
 │   │   │   ├── errors.py         Errors every adapter raises
 │   │   │   ├── keys.py           The one key/id rule all backends share
 │   │   │   ├── urls.py           Strict parsing of component URLs
@@ -118,6 +119,12 @@ and assert each chunk reaches the destination exactly once. Its worker loops are
 workers exist.
 
 ## Adding an adapter (e.g. a Redis ChunkStore or a Postgres MetadataStore)
+
+Two rules from the saved plan. A `MetadataStore` keeps the plan bytes exactly as given and the first save wins
+(`save_plan`: a Redis `SET NX`, a PostgreSQL `INSERT ... ON CONFLICT DO NOTHING`); the kit checks it, including
+two writers at once. A `Source` puts only values in its `ChunkSpec.payload` that JSON keeps exactly (text, numbers,
+booleans, null, lists, dicts with text keys; not tuples, dates, or sets): the plan is saved as JSON, and the source
+kit fails a payload that would change.
 
 1. **Create the package** with the same layout as an existing adapter: `packages/bitdrop-store-<name>/` for a
    ChunkStore, `packages/bitdrop-metadata-<name>/` for a MetadataStore. Depend only on `bitdrop-api` plus your client
@@ -228,6 +235,12 @@ back to the metadata store without counting a failure, and the command exits wit
 again continues where it stopped (a second Ctrl-C quits at once). Resuming needs a metadata store that survives
 the process; with `memory://` there is nothing to resume from.
 
+**The saved plan.** The first run of a job saves its plan (the schema and the list of chunks) in the metadata store.
+A later run of the same job id reads that plan instead of planning again, so a resumed job finishes exactly the
+chunks it started with, even if rows were added to the table meanwhile, and a changed `chunk_mib` or
+`split_column` in the job file has no effect on it. A job id belongs to its source table: pointing it at another
+table is refused (exit code 3, "use a new job id"). To start over, use a new job id.
+
 | Exit code | Meaning |
 |---|---|
 | 0 | Every chunk was loaded |
@@ -279,6 +292,8 @@ asyncio.run(main())
 
 Running the same `job_id` again against the same metadata store and destination resumes the job: chunks that are
 already loaded are skipped, and the destination's ledger makes a repeat harmless even if the metadata is lost.
+The job's plan is saved in the metadata store on the first run and reused on every later one (`Source.plan` is not
+called again), so the chunks stay the same; `PlanMismatch` is raised if the id was planned for another table.
 Cancelling the task that runs `run_transfer` is a clean stop: the workers hand their chunks back first.
 
 The `observer` only watches. It is called on the event loop with typed events (`PlanReady`, `ChunkStarted`,
