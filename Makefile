@@ -2,7 +2,7 @@
 # the underlying command directly. `make help` lists the targets.
 
 .DEFAULT_GOAL := help
-.PHONY: help sync test test-fast bench lint format typecheck arch check
+.PHONY: help sync test test-fast bench demo lint format typecheck arch check
 
 help:  ## Show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -18,6 +18,9 @@ test-fast:  ## Run the tests that need no Docker
 
 bench:  ## Measure chunk store throughput (needs Docker; prints a table)
 	uv run pytest benchmarks -s
+
+demo:  ## Watch a demo job run (no database needed)
+	uv run bitdrop run examples/demo.toml
 
 lint:  ## Lint and check formatting (no changes made)
 	uv run ruff check .

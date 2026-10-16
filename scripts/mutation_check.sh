@@ -7,7 +7,8 @@
 #   scripts/mutation_check.sh packages/bitdrop-connector-memory/src/bitdrop_connector_memory/__init__.py \
 #       packages/bitdrop-connector-memory/tests '        if entry in self._ledger:' '        if False:'
 #
-# The source file is restored afterwards, even if the run is interrupted.
+# The source file is restored afterwards, even if the run is interrupted. A run that hangs is
+# stopped after MUTATION_TIMEOUT seconds (default 120) and counts as killed.
 # Exit status: 0 = the mutant was KILLED (some test failed: good), 1 = it SURVIVED (all tests
 # passed: the tests are too weak), 2 = bad usage or the old text was not found exactly once.
 set -u
@@ -32,7 +33,23 @@ if text.count(old) != 1:
 path.write_text(text.replace(old, new))
 PY
 
-output="$(uv run pytest "$tests" -q -p no:cacheprovider 2>&1)"
+# A mutant that makes the tests hang is noticed too (CI would time out), so a run that exceeds
+# MUTATION_TIMEOUT seconds (default 120) counts as killed instead of blocking this script forever.
+output="$(python3 -I - "$tests" "${MUTATION_TIMEOUT:-120}" <<'PY'
+import os, signal, subprocess, sys
+tests, limit = sys.argv[1], float(sys.argv[2])
+process = subprocess.Popen(
+    ["uv", "run", "pytest", tests, "-q", "-p", "no:cacheprovider"],
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True,
+)
+try:
+    print(process.communicate(timeout=limit)[0])
+except subprocess.TimeoutExpired:
+    os.killpg(process.pid, signal.SIGKILL)  # uv, pytest, and anything pytest started
+    process.communicate()
+    print(f"1 failed: the tests hung and were stopped after {limit:.0f} s")
+PY
+)"
 echo "$output" | grep -E '^(FAILED|ERROR)|passed|failed' | head -n 8
 if echo "$output" | grep -qE '[0-9]+ (failed|error)'; then
     echo "mutant KILLED: the tests noticed"

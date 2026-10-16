@@ -1,0 +1,32 @@
+# A job that needs no database, to try bitdrop and watch it work:
+#
+#     make demo            (or: uv run bitdrop run examples/demo.toml)
+#
+# A generated table of 3 million rows is moved between two in-memory connectors. The delays make
+# every chunk take a while, as a real database would, so there is something to watch. The staging
+# tier is small on purpose: it fills up and the extractors have to wait for the loaders.
+#
+# Try it with the other displays too:   --ui plain    --ui json
+# And look before you run:              uv run bitdrop plan examples/demo.toml
+
+[job]
+id = "demo"
+
+[source]
+url = "memory://?demo_rows=3000000&delay_ms=500"
+table = "demo"
+
+[destination]
+url = "memory://?delay_ms=900"
+table = "orders"
+
+[staging]
+url = "memory://?max_bytes=60000000"
+
+[metadata]
+url = "memory://"
+
+[tuning]
+chunk_mib = 3
+extractors = 4
+loaders = 2

@@ -46,6 +46,7 @@ Last feature commit: `5425f67`.
 | Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host) |
 | Connectors | `bitdrop-connector-memory`, `bitdrop-connector-postgres` | `memory://` source+destination; `postgresql://` source (primary-key range splitting) and destination (ledger, native types) |
 | Command line | `bitdrop-cli` | the `bitdrop` command: `run`, `plan`, `status`, `components`; TOML job file; plain and JSON-lines progress; exit codes; Ctrl-C and SIGTERM hand chunks back |
+| Terminal UI | `bitdrop-tui` | a live Textual screen for a running job, selected with `--ui tui` (in progress) |
 | Cross-package tests | `tests/integration`, `tests/e2e`, `tests/architecture` | swap tests, runner with injected faults, real PostgreSQL to PostgreSQL, architecture rules, this log's checks |
 | Benchmarks | `benchmarks/test_chunk_store_throughput.py` | `make bench`: chunk store throughput table |
 | Tooling | `scripts/mutation_check.sh`, `scripts/add_workspace_package.py` | break-the-code-on-purpose check; register a new workspace package |

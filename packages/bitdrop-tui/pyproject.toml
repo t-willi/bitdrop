@@ -1,0 +1,17 @@
+[project]
+name = "bitdrop-tui"
+version = "0.1.0"
+description = "A live terminal UI (Textual) for a running bitdrop job."
+requires-python = ">=3.14"
+dependencies = ["bitdrop-api", "bitdrop-core", "textual>=8.2"]
+
+[project.entry-points."bitdrop.uis"]
+tui = "bitdrop_tui:create_ui"
+
+[tool.uv.sources]
+bitdrop-api = { workspace = true }
+bitdrop-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"

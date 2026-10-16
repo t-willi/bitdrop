@@ -25,7 +25,7 @@ REQUIRED_SECTIONS = (
     "## 8. Gotchas",
     "## 9. Keeping this log current",
 )
-PATH_ROOTS = ("docs/", "tests/", "packages/", "scripts/", "benchmarks/")
+PATH_ROOTS = ("docs/", "tests/", "packages/", "scripts/", "benchmarks/", "examples/")
 
 
 def log_text() -> str:

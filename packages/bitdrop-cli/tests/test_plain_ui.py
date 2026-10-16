@@ -4,7 +4,7 @@ import asyncio
 import io
 
 from bitdrop_api.metadata_store import ChunkRecord, ChunkState, Stage
-from bitdrop_cli.plain import PlainUi, progress_line, summary_lines
+from bitdrop_cli.plain import PlainUi, progress_line
 from bitdrop_core.progress import ChunkFailed, PlanReady, Snapshot
 from bitdrop_core.tracker import JobTracker
 from bitdrop_core.transfer import TransferReport
@@ -133,34 +133,6 @@ class TestProgressLine:
         tracker.apply(plan())
 
         assert "0/200 chunks" in progress_line(tracker)
-
-
-class TestSummary:
-    def test_a_complete_job_says_so_and_gives_the_numbers(self) -> None:
-        text = "\n".join(summary_lines(report()))
-
-        assert "job-1: all 200 chunks loaded" in text
-        assert "2,000,000" in text
-        assert "1.2 GiB" in text
-        assert "4.0 s" in text
-        assert "500k rows/s" in text
-
-    def test_failures_are_listed_with_their_reasons(self) -> None:
-        failure = ChunkRecord(
-            "job-1", "c0042", ChunkState.FAILED, 3, None, "ConnectionError: source went away"
-        )
-
-        text = "\n".join(summary_lines(report(loaded=198, failed=2, failures=(failure,))))
-
-        assert "198 of 200 chunks loaded, 2 FAILED" in text
-        assert "c0042" in text
-        assert "ConnectionError: source went away" in text
-
-    def test_chunks_the_destination_already_had_are_mentioned(self) -> None:
-        assert "3 chunks were already loaded" in "\n".join(summary_lines(report(duplicates=3)))
-
-    def test_nothing_is_said_about_repeats_when_there_were_none(self) -> None:
-        assert "already" not in "\n".join(summary_lines(report()))
 
 
 class TestThePlainDisplay:

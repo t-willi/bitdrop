@@ -17,6 +17,7 @@ change (and a different image)**, never a code change in the core or in another 
 | Metadata store | `MetadataStore`: register / claim / heartbeat / complete / fail chunks, with leases and fencing | In-memory, SQLite (built); Redis, Postgres, etcd (planned) |
 | Chunk codec | `ChunkCodec`: encode/decode record batches | Arrow IPC, optionally lz4 / zstd (built; injected as an object, no URL registry yet) |
 | Memory governor | `Governor`: admission control over byte credits | credit-based, … |
+| Progress display | `ProgressUi`: observer of a running transfer, shown to a person or a program | plain text, JSON lines, full-screen TUI (built); selected by name, not URL |
 | Provisioner / scaler | `Provisioner`: add/remove workers and data-plane capacity | Kubernetes, local processes, cloud VMs |
 
 The master, extractors, and loaders are *roles*. They know only the contracts above.

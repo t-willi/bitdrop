@@ -21,6 +21,7 @@ those directly, e.g. `uv run pytest packages/bitdrop-store-file -k atomic`.
 | `make test` | The whole test suite (`pytest`), including the tests that start PostgreSQL in Docker |
 | `make test-fast` | Everything that needs no Docker (about 5 seconds) |
 | `make bench` | Chunk store throughput table (needs Docker, about 10 seconds) |
+| `make demo` | Watch a demo job run in the TUI (no database, no Docker) |
 | `make lint` | `ruff` lint and format check, no changes |
 | `make format` | Auto-fix lint issues and format |
 | `make typecheck` | `mypy --strict` |
@@ -34,7 +35,8 @@ bitdrop/
 ├── pyproject.toml          Workspace root: dev tools and all tool configuration
 ├── Makefile                Developer commands (see above)
 ├── conftest.py             Repo-wide pytest setup
-├── docs/                   ideation.md, principles.md, this file
+├── docs/                   ideation.md, principles.md, cli-plan.md, this file
+├── examples/               Job files to try (demo.toml needs no database)
 ├── packages/               One uv-workspace package per component
 │   ├── bitdrop-api/          Contracts + shared types + the conformance kit. Depends on nothing.
 │   │   ├── src/bitdrop_api/
@@ -48,8 +50,13 @@ bitdrop/
 │   │       (also: source.py, destination.py, codec.py, schema.py for the connector contracts)
 │   ├── bitdrop-core/             Imports no adapter. Finds them by URL scheme and runs the transfer.
 │   │   └── src/bitdrop_core/
-│   │       ├── registry.py       open_source / open_destination / open_chunk_store / open_metadata_store
+│   │       ├── registry.py       open_source / open_destination / open_chunk_store / open_metadata_store / open_ui
 │   │       ├── transfer.py       run_transfer: plan, extract, stage, load, recover (master + workers)
+│   │       ├── progress.py       The events a running transfer reports to an observer
+│   │       ├── tracker.py        JobTracker: events in, display state out (totals, rates, estimate, chunk map)
+│   │       ├── ui.py             The ProgressUi contract: something that shows a running transfer
+│   │       ├── summary.py        The end-of-run text every display prints
+│   │       ├── humanize.py       Bytes, counts, rates, durations for people
 │   │       └── codec.py          Arrow IPC chunk codec (none / lz4 / zstd)
 │   ├── bitdrop-store-memory/     ChunkStore adapter: a dict in this process
 │   ├── bitdrop-store-file/       ChunkStore adapter: one file per chunk (point it at a tmpfs)
@@ -57,7 +64,9 @@ bitdrop/
 │   ├── bitdrop-metadata-memory/  MetadataStore adapter: dicts in this process
 │   ├── bitdrop-metadata-sqlite/  MetadataStore adapter: a SQLite file (persistent, multi-process)
 │   ├── bitdrop-connector-memory/ Source + Destination over in-memory Arrow tables
-│   └── bitdrop-connector-postgres/ Source + Destination for PostgreSQL (ADBC); needs Docker to test
+│   ├── bitdrop-connector-postgres/ Source + Destination for PostgreSQL (ADBC); needs Docker to test
+│   ├── bitdrop-cli/              The `bitdrop` command: job file, run / plan / status / components, plain and JSON displays
+│   └── bitdrop-tui/              The live terminal screen (Textual), found by the command through an entry point
 ├── benchmarks/             Throughput measurements (not part of the normal test run)
 ├── scripts/                Developer tools: mutation_check.sh, add_workspace_package.py
 └── tests/                  Tests that span packages
@@ -73,7 +82,8 @@ Each package follows the same shape: `pyproject.toml`, `src/<import_name>/`, `te
 | Rule | Enforced by |
 |---|---|
 | Core and adapters import only `bitdrop_api`, never each other | `make arch` (`import-linter`, configured in `pyproject.toml`) |
-| Core and contracts never name a concrete backend in code | `tests/architecture/test_core_is_backend_agnostic.py` |
+| Core, contracts, the command line tool, and the TUI never name a concrete backend in code | `tests/architecture/test_core_is_backend_agnostic.py` |
+| The command line tool and the TUI never import an adapter, and do not import each other | `make arch` (a layer above the core, and a forbidden-imports contract) |
 | An adapter is "supported" only if it passes the conformance kit | The adapter's `test_*_conformance.py` |
 | Every installed adapter works when chosen only by URL | `tests/integration/test_swapping_chunk_stores.py`, `test_pipeline_smoke.py` |
 
@@ -167,7 +177,73 @@ Each kind of store has its own scheme namespace, so `memory` exists as a chunk s
 
 ## Running a transfer
 
-There is no command-line tool yet; a transfer is a function call. Everything is chosen by URL:
+### The `bitdrop` command
+
+Try it first: `make demo` moves a generated table between two in-memory connectors, slowly enough to watch,
+with no database and no Docker. A real transfer is described by a TOML job file (`examples/demo.toml` is
+a complete one):
+
+```toml
+[job]
+id = "orders-1"                  # names the job; running the same id again resumes it
+
+[source]
+url = "${SOURCE_URL}"            # scheme://... picks the connector; ${NAME} reads the environment
+table = "public.orders"
+split_column = "id"              # optional hint for sources that split by a key
+
+[destination]
+url = "${DESTINATION_URL}"
+table = "orders"
+
+[staging]                        # where chunks wait in RAM
+url = "memory://?max_bytes=4000000000"
+
+[metadata]                       # chunk states, leases, retries: use one that survives the process
+url = "sqlite:///var/lib/bitdrop/orders-1.db"
+
+[tuning]                         # all optional
+extractors = 4
+loaders = 4
+chunk_mib = 64
+```
+
+A misspelled key or section is an error, never a silent default. Put passwords in the environment and refer
+to them as `${NAME}`: they stay out of the file, and no message the command prints repeats a value from it.
+
+| Command | What it does |
+|---|---|
+| `bitdrop run JOB.toml` | Run the job. `--ui auto\|tui\|plain\|json`, `--job-id`, `--extractors`, `--loaders`, `-v` |
+| `bitdrop plan JOB.toml` | Show how the source table would be cut into chunks. Moves no data, never opens the destination. `--json` |
+| `bitdrop status JOB.toml` | Chunk counts as the metadata store has them, whoever is running the job. `--json` |
+| `bitdrop components` | The connectors, stores, and displays that are installed |
+
+**Displays.** `auto` (the default) is the TUI on an interactive terminal when `bitdrop-tui` is installed, plain
+text otherwise. `plain` prints a progress line every two seconds to standard error and a summary to standard
+output. `json` prints one JSON object per line on standard output (`plan`, `progress`, `chunk_failed`, then
+`report`, `stopped`, or `error`) and no URLs. In the TUI, `q` (or Ctrl-C) stops the job and `l` hides the events.
+
+**Stopping and resuming.** Ctrl-C, SIGTERM, and `q` stop the job cleanly: every chunk a worker holds is handed
+back to the metadata store without counting a failure, and the command exits with 130. Running the same command
+again continues where it stopped (a second Ctrl-C quits at once). Resuming needs a metadata store that survives
+the process; with `memory://` there is nothing to resume from.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Every chunk was loaded |
+| 1 | The job ended, but some chunks gave up (they are listed) |
+| 2 | Bad command line, job file, or URL. Nothing was done |
+| 3 | A component refused or could not be reached (unknown table, unsupported column type, ...) |
+| 70 | A bug (`-v` prints the traceback) |
+| 130 | Stopped on purpose |
+
+**Demo data.** The memory connector can stand in for a database: `memory://?demo_rows=N` (source) serves a
+generated table named `demo`, and `memory://?delay_ms=D` (source or destination) makes every chunk take `D`
+milliseconds.
+
+### From Python
+
+The command is a thin layer over one function. Everything is chosen by URL:
 
 ```python
 import asyncio
@@ -193,6 +269,7 @@ async def main() -> None:
         staging,
         metadata,
         TransferConfig(job_id="job-1", source_table="public.orders", destination_table="orders"),
+        observer=print,  # optional: receives the events of bitdrop_core.progress
     )
     print(report.succeeded, report.rows_loaded, report.failures)
 
@@ -202,6 +279,20 @@ asyncio.run(main())
 
 Running the same `job_id` again against the same metadata store and destination resumes the job: chunks that are
 already loaded are skipped, and the destination's ledger makes a repeat harmless even if the metadata is lost.
+Cancelling the task that runs `run_transfer` is a clean stop: the workers hand their chunks back first.
+
+The `observer` only watches. It is called on the event loop with typed events (`PlanReady`, `ChunkStarted`,
+`ChunkFinished`, `ChunkFailed`, and a `Snapshot` about four times a second and once at the end), it must return
+quickly, and if it raises the exception is logged once and ignored: the data arrives exactly as without it.
+`JobTracker` turns the events into totals, rates, an estimate, a chunk map, and a worker table; the plain display
+and the TUI both use it.
+
+### Adding a display
+
+A display is a component like any other. Create `packages/bitdrop-<name>/` with a factory
+`(UiContext) -> ProgressUi`, register it in `[project.entry-points."bitdrop.uis"]`, and add it to the workspace
+with `uv run python scripts/add_workspace_package.py bitdrop-<name> bitdrop_<name> --top`. `bitdrop run --ui <name>`
+finds it; no line of the command line tool changes.
 
 ## The PostgreSQL connector
 
@@ -268,8 +359,8 @@ servers run in Docker on the same machine, so read the numbers as relative.
 
 | Script | Use |
 |---|---|
-| `scripts/mutation_check.sh <file> <tests> '<old>' '<new>'` | Breaks the code on purpose, runs the tests, restores the file. Exit 0 means a test noticed (good), 1 means the mutant survived (the tests are too weak). |
-| `uv run python scripts/add_workspace_package.py <dist> <module>` | Registers a new package in the root `pyproject.toml` (dependencies, uv sources, ruff, mypy, import-linter). Aborts without writing if anything is off. |
+| `scripts/mutation_check.sh <file> <tests> '<old>' '<new>'` | Breaks the code on purpose, runs the tests, restores the file. Exit 0 means a test noticed (good), 1 means the mutant survived (the tests are too weak). A run that hangs is stopped after `MUTATION_TIMEOUT` seconds (default 120) and counts as noticed. |
+| `uv run python scripts/add_workspace_package.py <dist> <module> [--top]` | Registers a new package in the root `pyproject.toml` (dependencies, uv sources, ruff, mypy, import-linter). `--top` is for front ends such as the command line tool and displays. Aborts without writing if anything is off. |
 
 ## The agent log
 

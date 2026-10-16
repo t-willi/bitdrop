@@ -25,7 +25,7 @@ BACKEND_NAMES = (
 )
 """Lower-case fragments that must not appear in the code of backend-agnostic packages."""
 
-AGNOSTIC_PACKAGES = ("bitdrop_api", "bitdrop_core", "bitdrop_cli")
+AGNOSTIC_PACKAGES = ("bitdrop_api", "bitdrop_core", "bitdrop_cli", "bitdrop_tui")
 
 
 def find_backend_names(source: str) -> list[str]:
