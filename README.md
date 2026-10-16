@@ -6,8 +6,9 @@ for while the job runs.
 
 **Status:** working end to end for PostgreSQL to PostgreSQL. A table is planned into chunks, extracted in parallel,
 staged in RAM, and loaded in parallel; crashes, hung calls, lost staging data, and repeated runs are survived without
-losing or duplicating a row (a SQL fingerprint of every row proves the copy). Not yet: a CLI, Redis and other
-staging stores, other databases, snapshot-consistent reads. See
+losing or duplicating a row (a SQL fingerprint of every row proves the copy). Chunks can be staged in memory, on disk, or
+in a Redis, Valkey, or Dragonfly server over the network. Not yet: a CLI, memcached,
+other databases, snapshot-consistent reads. See
 [docs/ideation.md](docs/ideation.md#12-results-so-far-2026-10-16) for measurements and findings.
 
 ## Quick start

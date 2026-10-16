@@ -19,6 +19,7 @@ those directly, e.g. `uv run pytest packages/bitdrop-store-file -k atomic`.
 |---|---|
 | `make test` | The whole test suite (`pytest`), including the tests that start PostgreSQL in Docker |
 | `make test-fast` | Everything that needs no Docker (about 5 seconds) |
+| `make bench` | Chunk store throughput table (needs Docker, about 10 seconds) |
 | `make lint` | `ruff` lint and format check, no changes |
 | `make format` | Auto-fix lint issues and format |
 | `make typecheck` | `mypy --strict` |
@@ -51,10 +52,12 @@ bitdrop/
 │   │       └── codec.py          Arrow IPC chunk codec (none / lz4 / zstd)
 │   ├── bitdrop-store-memory/     ChunkStore adapter: a dict in this process
 │   ├── bitdrop-store-file/       ChunkStore adapter: one file per chunk (point it at a tmpfs)
+│   ├── bitdrop-store-redis/      ChunkStore adapter for the Redis protocol: Redis, Valkey, Dragonfly
 │   ├── bitdrop-metadata-memory/  MetadataStore adapter: dicts in this process
 │   ├── bitdrop-metadata-sqlite/  MetadataStore adapter: a SQLite file (persistent, multi-process)
 │   ├── bitdrop-connector-memory/ Source + Destination over in-memory Arrow tables
 │   └── bitdrop-connector-postgres/ Source + Destination for PostgreSQL (ADBC); needs Docker to test
+├── benchmarks/             Throughput measurements (not part of the normal test run)
 └── tests/                  Tests that span packages
     ├── integration/          Swap tests, a miniature pipeline, and the transfer runner with injected faults
     ├── e2e/                  Real PostgreSQL to real PostgreSQL (Docker), verified by row fingerprints
@@ -83,6 +86,9 @@ Docker host is affected.
 uv run pytest tests/e2e -s       # the end-to-end suite, with throughput printed
 uv run pytest -m docker          # every test that needs Docker
 ```
+
+The Redis-protocol tests start Redis, Valkey, and Dragonfly containers (pinned versions, persistence off) and run the
+same conformance kit against each, so "any in-memory key-value store works" is demonstrated, not assumed.
 
 ## How we work: test-driven
 
@@ -223,3 +229,35 @@ refused at planning with the column named. Workaround: transfer a view that cast
 - Arrays with `NULL` elements are refused (the driver would store them as `0` or `''`); see principle P2.
 - Chunk sizes come from `reltuples` (or a `count(*)` for tables never analysed) and a row-width sample; skewed data
   gives uneven chunks.
+
+## The Redis chunk store
+
+`redis://[:password@]host:port/db` works with anything that speaks the Redis protocol; tested against Redis 7.4,
+Valkey 8.1, and Dragonfly 2.0 (see `kv_servers` in `conftest.py`). `put` is `SET` (atomic), `get` is `GET`, `delete`
+is `UNLINK` (frees big values without blocking the server).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `bitdrop_prefix` | `bitdrop:` | Prepended to every key, so several users can share a server |
+| `bitdrop_max_value_bytes` | 512 MiB | Largest chunk; set it to match the server (a memcached-like 1 MiB limit works too) |
+| `bitdrop_max_connections` | 32 | Connection pool size; more callers than this wait their turn |
+| anything else | | Passed to redis-py (`socket_timeout`, `health_check_interval`, ...) |
+
+**Configure the server as a data-plane node:** no persistence (`--save "" --appendonly no`; the source is the durable
+copy, and a snapshot fork can double memory use) and `maxmemory-policy noeviction` (a full server then refuses writes,
+which the runner turns into backpressure, instead of dropping chunks). With an eviction policy the store still never
+returns wrong data: evicted chunks are reported as missing and extracted again. Not built yet: TLS (`rediss://`),
+Redis Cluster, and sharding one job over several servers.
+
+Failures are `StoreFull` (out of memory, including Dragonfly's different wording) or `StoreUnavailable` (unreachable,
+authentication, timeouts); passwords never appear in messages.
+
+## Measuring the chunk stores
+
+```bash
+make bench     # or: uv run pytest benchmarks -s
+```
+
+Writes, reads, and deletes 128 MiB of chunks (1, 16, and 64 MiB each; 1 and 8 in flight) through the `ChunkStore`
+contract for every store, and prints one table. See the caveats in `benchmarks/test_chunk_store_throughput.py`: the
+servers run in Docker on the same machine, so read the numbers as relative.

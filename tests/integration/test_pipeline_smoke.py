@@ -13,6 +13,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator, Callable
 from hashlib import sha256
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -25,6 +26,9 @@ from bitdrop_core.registry import (
     open_chunk_store,
     open_metadata_store,
 )
+
+if TYPE_CHECKING:
+    from conftest import KvServer
 
 JOB = "job-1"
 CHUNK_COUNT = 40
@@ -186,3 +190,23 @@ async def _exists(chunks: ChunkStore, key: str) -> bool:
     except ChunkNotFound:
         return False
     return True
+
+
+@pytest.mark.docker
+async def test_the_pipeline_works_over_a_network_chunk_store(
+    meta: MetadataStore, kv: KvServer
+) -> None:
+    """The same scenario with the chunks held by a real Redis-protocol server."""
+    chunks = open_chunk_store(kv.url)
+    try:
+        await meta.register_chunks(JOB, [f"c{i:03d}" for i in range(CHUNK_COUNT)])
+        dead_claim = await _claim_and_vanish(meta)
+
+        destination = await run_pipeline(meta, chunks)
+
+        assert set(writes_per_chunk(destination).values()) == {1}
+        assert (await meta.counts(JOB))[ChunkState.LOADED] == CHUNK_COUNT
+        with pytest.raises(LeaseLost):
+            await meta.complete(dead_claim)
+    finally:
+        await chunks.aclose()

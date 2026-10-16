@@ -9,6 +9,7 @@ Run with ``-s`` to see the throughput printed by the big test:
 """
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -28,7 +29,7 @@ from bitdrop_core.registry import (
 from bitdrop_core.transfer import TransferConfig, TransferReport, run_transfer
 
 if TYPE_CHECKING:
-    from conftest import PostgresClient, PostgresServer
+    from conftest import KvServer, PostgresClient, PostgresServer
 
 pytestmark = pytest.mark.docker
 
@@ -478,3 +479,109 @@ async def test_stores_chosen_by_url_work_with_real_databases(
     assert report.succeeded
     assert fingerprint(pg, destination_url, "people") == fingerprint(pg, source_url, "people")
     assert ChunkState.LOADED.value == "loaded"
+
+
+# -- staging in a network chunk store -----------------------------------------------------------------
+# The chunks now cross a real network hop: extractor -> Redis-protocol server -> loader.
+
+
+async def test_a_wide_table_through_a_network_chunk_store(
+    source_url: str, destination_url: str, pg: PostgresClient, kv: KvServer
+) -> None:
+    rows = 200_000
+    pg.execute(source_url, ORDERS_DDL)
+    pg.execute(source_url, ORDERS_FILL.format(rows=rows))
+    pg.execute(source_url, "ANALYZE orders")
+
+    report = await transfer(
+        source_url,
+        destination_url,
+        source_table="orders",
+        destination_table="orders_copy",
+        chunk_store=kv.url,
+    )
+
+    assert report.succeeded, report.failures
+    assert report.rows_loaded == rows
+    assert fingerprint(pg, destination_url, "orders_copy") == fingerprint(pg, source_url, "orders")
+    assert kv.client().dbsize() == 0, "chunks were left behind in the staging server"
+    megabytes = report.bytes_staged / MIB
+    print(
+        f"\n[e2e] staging in {kv.flavor}: {rows:,} rows in {report.chunks_total} chunks: "
+        f"{report.duration_seconds:.2f}s, {rows / report.duration_seconds:,.0f} rows/s, "
+        f"{megabytes / report.duration_seconds:.1f} MiB/s through the staging tier"
+    )
+
+
+class WipeStagingDestination(PostgresDestination):
+    """Wipes the staging server after ``after`` chunks were loaded, like a crash or restart would."""
+
+    def __init__(self, url: str, wipe: Callable[[], None], after: int) -> None:
+        super().__init__(url)
+        self.wipe, self.after, self.committed = wipe, after, 0
+
+    async def write_chunk(self, job_id: str, chunk_id: str, table: str, data: pa.Table):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(0.02)  # let extraction run ahead so many chunks are staged
+        result = await super().write_chunk(job_id, chunk_id, table, data)
+        self.committed += 1
+        if self.committed == self.after:
+            self.wipe()
+        return result
+
+
+async def test_wiping_the_staging_server_mid_job_loses_no_row_and_duplicates_none(
+    source_url: str, destination_url: str, pg: PostgresClient, kv: KvServer
+) -> None:
+    """RAM is volatile by design: lost chunks are simply extracted again from the source."""
+    pg.create_sample_table(source_url, "people", rows=30_000)
+
+    report = await transfer(
+        source_url,
+        destination_url,
+        source_table="people",
+        destination_table="people",
+        chunk_store=kv.url,
+        target_chunk_bytes=60_000,
+        destination=WipeStagingDestination(destination_url, kv.client().flushall, after=5),
+    )
+
+    assert report.succeeded, report.failures
+    assert report.rows_extracted > 30_000, "nothing was lost, so the test proves nothing"
+    assert pg.scalar(destination_url, "SELECT count(*) FROM people") == 30_000
+    assert fingerprint(pg, destination_url, "people") == fingerprint(pg, source_url, "people")
+
+
+async def test_a_killed_run_resumes_with_the_chunks_still_staged_in_the_server(
+    source_url: str, destination_url: str, pg: PostgresClient, kv: KvServer, tmp_path: Path
+) -> None:
+    """The staging server outlives the crashed workers, so the resumed run loads what is there."""
+    pg.create_sample_table(source_url, "people", rows=30_000)
+    common: dict[str, object] = {
+        "source_table": "people",
+        "destination_table": "people",
+        "chunk_store": kv.url,
+        "metadata_store": f"sqlite://{tmp_path}/meta.db",
+        "target_chunk_bytes": 60_000,
+        "lease_seconds": 1.0,
+        "reaper_interval": 0.1,
+    }
+    reached = asyncio.Event()
+    first_run = asyncio.create_task(
+        transfer(
+            source_url,
+            destination_url,
+            destination=KillSwitchDestination(destination_url, limit=5, reached=reached),
+            **common,  # type: ignore[arg-type]
+        )
+    )
+    await asyncio.wait_for(reached.wait(), timeout=60)
+    first_run.cancel()
+    with suppress(asyncio.CancelledError):
+        await first_run
+    assert kv.client().dbsize() > 0, "no chunk survived in the server: the test proves nothing"
+
+    resumed = await transfer(source_url, destination_url, **common)  # type: ignore[arg-type]
+
+    assert resumed.succeeded, resumed.failures
+    assert fingerprint(pg, destination_url, "people") == fingerprint(pg, source_url, "people")
+    assert kv.client().dbsize() == 0

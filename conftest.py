@@ -15,6 +15,19 @@ pytest.register_assert_rewrite("bitdrop_api.testing")
 
 POSTGRES_IMAGE = "postgres:17-alpine"
 
+# Servers speaking the Redis protocol. Persistence is off, as it would be for a data-plane node:
+# the source is the durable copy, and a fork for snapshots could double memory use.
+_REDIS_ARGS = ["--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+KV_SERVERS: dict[str, tuple[str, list[str]]] = {
+    "redis": ("redis:7.4-alpine", ["redis-server", *_REDIS_ARGS]),
+    "valkey": ("valkey/valkey:8.1-alpine", ["valkey-server", *_REDIS_ARGS]),
+    "dragonfly": (
+        "docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2",
+        ["dragonfly", "--dbfilename=", "--proactor_threads=2"],
+    ),
+}
+KV_FLAVORS = tuple(KV_SERVERS)
+
 
 @dataclass(frozen=True)
 class PostgresServer:
@@ -155,3 +168,108 @@ class PostgresClient:
 def pg() -> PostgresClient:
     """A helper for creating, filling, and inspecting tables in test databases."""
     return PostgresClient()
+
+
+@dataclass(frozen=True)
+class KvServer:
+    """A throwaway server speaking the Redis protocol, running in a container."""
+
+    flavor: str
+    host: str
+    port: int
+    password: str | None = None
+
+    @property
+    def url(self) -> str:
+        """Connection URL for database 0."""
+        auth = f":{self.password}@" if self.password else ""
+        return f"redis://{auth}{self.host}:{self.port}/0"
+
+    def client(self) -> Any:
+        """Return a synchronous client for setup and inspection in tests."""
+        import redis
+
+        return redis.Redis.from_url(self.url)
+
+
+class KvServers:
+    """Starts Redis-protocol servers on demand and stops them all at the end of the session."""
+
+    def __init__(self) -> None:
+        self._running: dict[tuple[str, tuple[str, ...], str | None], tuple[Any, KvServer]] = {}
+
+    def get(self, flavor: str, *extra_args: str, password: str | None = None) -> KvServer:
+        """Return a running server of ``flavor`` (started on first use, then reused).
+
+        ``extra_args`` are appended to the server command line; they select a separate instance.
+        """
+        key = (flavor, extra_args, password)
+        if key not in self._running:
+            self._running[key] = self._start(flavor, extra_args, password)
+        return self._running[key][1]
+
+    def stop_all(self) -> None:
+        """Stop and remove every container started through this object."""
+        for container, _ in self._running.values():
+            container.stop()
+        self._running.clear()
+
+    @staticmethod
+    def _start(
+        flavor: str, extra_args: tuple[str, ...], password: str | None
+    ) -> tuple[Any, KvServer]:
+        import time
+
+        import redis
+        from testcontainers.core.container import DockerContainer
+
+        image, command = KV_SERVERS[flavor]
+        command = [*command, *extra_args]
+        if password:
+            command += ["--requirepass", password]
+        container = DockerContainer(image).with_exposed_ports(6379).with_command(command)
+        if flavor == "dragonfly":
+            container = container.with_kwargs(ulimits=[{"Name": "memlock", "Soft": -1, "Hard": -1}])
+        try:
+            container.start()
+        except Exception as error:
+            pytest.skip(f"cannot start a {flavor} container ({type(error).__name__}: {error})")
+
+        server = KvServer(
+            flavor,
+            container.get_container_host_ip(),
+            int(container.get_exposed_port(6379)),
+            password,
+        )
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                server.client().ping()
+                return container, server
+            except redis.exceptions.RedisError:
+                if time.monotonic() > deadline:
+                    container.stop()
+                    pytest.skip(f"{flavor} did not become ready within 30 seconds")
+                time.sleep(0.2)
+
+
+@pytest.fixture(scope="session")
+def kv_servers() -> Iterator[KvServers]:
+    """Redis-protocol servers (redis, valkey, dragonfly), started on demand.
+
+    Tests using this fixture should be marked ``@pytest.mark.docker``.
+    """
+    servers = KvServers()
+    yield servers
+    servers.stop_all()
+
+
+@pytest.fixture(params=KV_FLAVORS)
+def kv(request: pytest.FixtureRequest, kv_servers: KvServers) -> KvServer:
+    """A running Redis-protocol server, emptied before the test.
+
+    Parametrized: every test requesting it runs once per server flavor (Redis, Valkey, Dragonfly).
+    """
+    server = kv_servers.get(request.param)
+    server.client().flushall()
+    return server

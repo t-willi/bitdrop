@@ -83,7 +83,8 @@ class TransferConfig:
     """Failures a chunk may suffer before it is given up on."""
 
     chunk_timeout: float = 600.0
-    """Longest a single source read or destination write may take before it counts as a failure."""
+    """Longest a single call to the source, destination, or chunk store may take; a stalled
+    connection then counts as a failure of the chunk instead of hanging a worker forever."""
 
     backpressure_timeout: float = 600.0
     """Longest an extractor waits for room in a full chunk store before the chunk fails."""
@@ -377,7 +378,8 @@ class _Transfer:
         deadline = time.monotonic() + self._config.backpressure_timeout
         while True:
             try:
-                await self._chunks.put(key, data)
+                async with asyncio.timeout(self._config.chunk_timeout):  # a stalled connection
+                    await self._chunks.put(key, data)
                 return
             except StoreFull:
                 if time.monotonic() >= deadline:
@@ -387,8 +389,8 @@ class _Transfer:
     async def _load(self, claim: Claim) -> None:
         cfg = self._config
         key = self._blob_key(claim.chunk_id)
-        data = await self._chunks.get(key)
         async with asyncio.timeout(cfg.chunk_timeout):
+            data = await self._chunks.get(key)
             table = await asyncio.to_thread(self._codec.decode, data)
             written = await self._destination.write_chunk(
                 cfg.job_id, claim.chunk_id, cfg.destination_table, table
@@ -397,8 +399,13 @@ class _Transfer:
             self._stats.duplicates_skipped += 1
         else:
             self._stats.rows_loaded += written.rows
+        # Free the RAM *before* recording the chunk as done. The data is safe in the destination
+        # (its ledger will recognise a repeat), so the only cost of a crash between these two
+        # steps is one re-extraction. The other order would strand the blob: nobody revisits a
+        # loaded chunk.
+        async with asyncio.timeout(cfg.chunk_timeout):
+            await self._chunks.delete(key)
         await self._meta.complete(claim)
-        await self._chunks.delete(key)  # free the RAM as soon as the chunk is safe
 
     def _blob_key(self, chunk_id: str) -> str:
         return f"{self._config.job_id}:{chunk_id}"

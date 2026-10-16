@@ -13,7 +13,7 @@ change (and a different image)**, never a code change in the core or in another 
 |---|---|---|
 | Source connector | `Source`: plan/split a table, read a chunk as record batches | In-memory, PostgreSQL (built); MySQL, … (planned) |
 | Destination connector | `Destination`: prepare, write a chunk idempotently (ledger), count | In-memory, PostgreSQL (built); ClickHouse, Parquet/S3, … (planned) |
-| Chunk store (data plane) | `ChunkStore`: put/get/delete a blob by key | In-memory, file/tmpfs (built); Redis, Valkey, Dragonfly, Garnet, memcached, Arrow Flight peers (planned) |
+| Chunk store (data plane) | `ChunkStore`: put/get/delete a blob by key | In-memory, file/tmpfs, Redis protocol (Redis, Valkey, Dragonfly) (built); memcached, Arrow Flight peers (planned; Garnet should work through the Redis adapter but is untested) |
 | Metadata store | `MetadataStore`: register / claim / heartbeat / complete / fail chunks, with leases and fencing | In-memory, SQLite (built); Redis, Postgres, etcd (planned) |
 | Chunk codec | `ChunkCodec`: encode/decode record batches | Arrow IPC, optionally lz4 / zstd (built; injected as an object, no URL registry yet) |
 | Memory governor | `Governor`: admission control over byte credits | credit-based, … |

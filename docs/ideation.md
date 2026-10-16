@@ -339,7 +339,9 @@ network-bound, multi-node performance. They show the pipeline's own overhead is 
 | 26 column types (ints, floats incl. `NaN`/`Infinity`, text up to 100 KB, Unicode, dates, timestamps, `bytea`, `uuid`, `json`/`jsonb`, `inet`, `interval`, `numeric(p,s)`, arrays) arrive bit for bit | `test_every_supported_type_survives_the_trip` |
 | A loader that commits and then dies causes no duplicate rows | `test_a_loader_dying_after_its_commit_causes_no_duplicate_rows` |
 | A run killed mid-job resumes to the identical result (staging lost or kept) | `test_a_killed_run_resumes_to_the_same_result` |
-| Hung calls time out, slow reads keep their lease through heartbeats, a full staging store applies backpressure, a lost blob is re-extracted | `tests/integration/test_transfer_runner.py` |
+| Hung calls (source, destination, *and* chunk store) time out, slow reads keep their lease through heartbeats, a full staging store applies backpressure, a lost blob is re-extracted | `tests/integration/test_transfer_runner.py` |
+| Staging in a real Redis, Valkey, or Dragonfly server over the network gives the same exact copy at about 425k rows/s, 98 MiB/s (identical on all three at this scale) | `tests/e2e/...::test_a_wide_table_through_a_network_chunk_store` |
+| Wiping the staging server mid-job (a crash or restart) loses no row and duplicates none; the lost chunks are extracted again | `...::test_wiping_the_staging_server_mid_job_...` |
 
 Findings that changed the design:
 
@@ -350,9 +352,23 @@ Findings that changed the design:
 - The installed ADBC COPY writer stores `NULL` array elements as `0` or `''` without an error. bitdrop refuses
   such chunks (principle P2). Worth reporting upstream; a staged-text workaround is possible.
 
+- The network chunk store exposed a leak: a loader that died *after* marking a chunk loaded but *before* deleting
+  its staged copy stranded the blob in the server for good (nobody revisits a loaded chunk). The runner now deletes
+  the staged copy before recording completion; the cost of a crash in the other window is one re-extraction.
+- A stalled connection to a networked store would have hung a worker forever, because its heartbeat keeps the lease
+  alive. Chunk store calls now share the per-call timeout of source and destination.
+- Redis and Valkey report a full server as `OutOfMemoryError`; Dragonfly answers a plain `Out of memory`. The adapter
+  recognises both.
+
+**H1 (data-plane throughput), first answer** (`make bench`, single Python client process, loopback to a Docker
+container on macOS; indicative only): Redis, Valkey, and Dragonfly each move 1 to 64 MiB chunks at roughly
+1.3 to 3.4 GiB/s, with no meaningful difference between them. That is 10 to 30 times what the whole pipeline moves
+today (about 100 MiB/s through staging), so on one machine the data plane is not the bottleneck. The benchmark cannot
+show what multi-threaded Dragonfly buys: that needs many concurrent client processes, and a real network.
+
 Experiments from section 10: **H3** (crash safety) is validated at the connector level; **H4** (row-size estimates) is
-implemented by sampling but not yet checked on wide-column data; **H1, H2, H5, H6** (data-plane throughput, decoupling
-benefit, pod-local vs dedicated store, compression) are still open and need a networked setup to mean anything.
+implemented by sampling but not yet checked on wide-column data; **H1** is partly answered (above); **H2, H5, H6** (decoupling benefit, pod-local vs dedicated store, compression) are still
+open and need a real network to mean anything.
 
 Known gaps: no snapshot-consistent reads, no destination constraints/indexes, splitting only by an integer primary key
-(or a hint), no memory governor beyond simple backpressure, no CLI, no Redis adapters.
+(or a hint), no memory governor beyond simple backpressure, no CLI, no memcached adapter, no Redis TLS/Cluster/sharding.

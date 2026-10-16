@@ -78,6 +78,8 @@ class ChunkStore(Protocol):
     * ``delete`` is idempotent.
     * When full, ``put`` raises ``StoreFull`` (or the store may later report ``ChunkNotFound`` for
       evicted keys). It never silently corrupts data.
+    * Stores reached over a network raise ``StoreUnavailable`` when the backend cannot be reached or
+      refuses a request for another reason than capacity. Error messages never contain secrets.
     """
 
     async def put(self, key: str, value: bytes) -> None:

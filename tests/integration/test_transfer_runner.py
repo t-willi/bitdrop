@@ -5,6 +5,7 @@ that fails, a destination that commits and then 'dies', a store that loses a blo
 """
 
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from bitdrop_api.errors import (
     StoreFull,
     TableNotFound,
 )
-from bitdrop_api.metadata_store import ChunkState, MetadataStore
+from bitdrop_api.metadata_store import ChunkState, MetadataStore, Stage
 from bitdrop_api.source import ChunkSpec, SourcePlan
 from bitdrop_api.testing import make_rows
 from bitdrop_connector_memory import MemoryDestination, MemorySource
@@ -322,6 +323,42 @@ class TestLostBlob:
         assert (await w.meta.get_chunk("job-1", "c000005")).failures == 1
 
 
+class HangingStore(MemoryChunkStore):
+    """Hangs the first ``get`` or ``put`` of one key forever, like a stalled network connection."""
+
+    def __init__(self, victim_key: str, *, hang_on: str) -> None:
+        super().__init__()
+        self.victim_key, self.hang_on, self.struck = victim_key, hang_on, False
+
+    async def _maybe_hang(self, operation: str, key: str) -> None:
+        if operation == self.hang_on and key == self.victim_key and not self.struck:
+            self.struck = True
+            await asyncio.sleep(3600)
+
+    async def get(self, key: str) -> bytes:
+        await self._maybe_hang("get", key)
+        return await super().get(key)
+
+    async def put(self, key: str, value: bytes) -> None:
+        await self._maybe_hang("put", key)
+        await super().put(key, value)
+
+
+class TestHungChunkStore:
+    """A networked store can stall. Its calls need the same timeout as source and destination."""
+
+    @pytest.mark.parametrize("operation", ["get", "put"])
+    async def test_a_hung_call_is_timed_out_and_the_chunk_retried(self, operation: str) -> None:
+        w = world(chunks=HangingStore("job-1:c000004", hang_on=operation))
+
+        report = await run(w, config(chunk_timeout=0.15))
+
+        assert report.succeeded
+        assert copied(w).equals(make_rows(1, ROWS))
+        assert (await w.meta.get_chunk("job-1", "c000004")).failures == 1
+        await assert_staging_is_empty(w, report)
+
+
 class CountingStore(MemoryChunkStore):
     """Counts how often ``put`` was refused because the store was full."""
 
@@ -368,6 +405,47 @@ class TestBackpressure:
         assert report.succeeded
         assert report.chunks_total > 1
         assert copied(w).equals(make_rows(1, ROWS))
+
+
+class StallAfterFirstLoadCompletion(MemoryMetadataStore):
+    """Records the first load completion, then stalls: the process 'died' right after marking it."""
+
+    def __init__(self, reached: asyncio.Event) -> None:
+        super().__init__()
+        self.reached, self.struck = reached, False
+
+    async def complete(self, claim):  # type: ignore[no-untyped-def]
+        await super().complete(claim)
+        if claim.stage is Stage.LOAD and not self.struck:
+            self.struck = True
+            self.reached.set()
+            await asyncio.sleep(3600)
+
+
+class TestCrashAfterCompletion:
+    """The window after a chunk was recorded as loaded but before its staged copy was deleted."""
+
+    async def test_nothing_is_left_staged_after_the_job_is_resumed(self, tmp_path: Path) -> None:
+        """A staging store that outlives the workers (disk, or a network server) must not leak.
+
+        If the blob were deleted only after the chunk was marked loaded, a crash in between would
+        strand it for good: nobody revisits a loaded chunk, and in a shared server that is RAM.
+        """
+        reached = asyncio.Event()
+        chunks = open_chunk_store(f"file://{tmp_path}/chunks")
+        w = world(chunks=chunks, meta=StallAfterFirstLoadCompletion(reached), rows=1000)
+        cfg = config(lease_seconds=0.3, reaper_interval=0.05)
+        first_run = asyncio.create_task(run(w, cfg))
+        await asyncio.wait_for(reached.wait(), timeout=10)
+        first_run.cancel()  # the 'crash'
+        with suppress(asyncio.CancelledError):
+            await first_run
+
+        resumed = await run(w, cfg)
+
+        assert resumed.succeeded
+        assert copied(w).equals(make_rows(1, 1000))
+        assert list((tmp_path / "chunks").iterdir()) == [], "a staged chunk was leaked"
 
 
 # -- resuming -------------------------------------------------------------------------------------

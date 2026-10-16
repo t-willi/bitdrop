@@ -15,6 +15,7 @@ dependencies = [
     "bitdrop-metadata-sqlite",
     "bitdrop-connector-memory",
     "bitdrop-connector-postgres",
+    "bitdrop-store-redis",
 ]
 
 [dependency-groups]
@@ -44,6 +45,7 @@ bitdrop-metadata-memory = { workspace = true }
 bitdrop-metadata-sqlite = { workspace = true }
 bitdrop-connector-memory = { workspace = true }
 bitdrop-connector-postgres = { workspace = true }
+bitdrop-store-redis = { workspace = true }
 
 # ---------------------------------------------------------------------------------------------
 # pytest
@@ -52,7 +54,7 @@ bitdrop-connector-postgres = { workspace = true }
 testpaths = ["packages", "tests"]
 # importlib mode: test files in different packages may share a basename without clashing.
 addopts = "-ra --strict-markers --import-mode=importlib"
-markers = ["docker: needs a running Docker daemon (starts a PostgreSQL container)"]
+markers = ["docker: needs a running Docker daemon (starts database containers)"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
@@ -76,6 +78,7 @@ known-first-party = [
     "bitdrop_metadata_sqlite",
     "bitdrop_connector_memory",
     "bitdrop_connector_postgres",
+    "bitdrop_store_redis",
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -87,6 +90,7 @@ convention = "google"
 "tests/**" = ["D", "ASYNC240"]
 # End-to-end tests carry SQL fixtures (wide INSERT rows) that are clearer unwrapped.
 "tests/e2e/**" = ["D", "ASYNC240", "E501"]
+"benchmarks/**" = ["D", "ASYNC240", "E501"]
 "conftest.py" = ["D"]
 
 # ---------------------------------------------------------------------------------------------
@@ -105,6 +109,7 @@ mypy_path = [
     "packages/bitdrop-metadata-sqlite/src",
     "packages/bitdrop-connector-memory/src",
     "packages/bitdrop-connector-postgres/src",
+    "packages/bitdrop-store-redis/src",
 ]
 
 [[tool.mypy.overrides]]
@@ -125,6 +130,7 @@ root_packages = [
     "bitdrop_metadata_sqlite",
     "bitdrop_connector_memory",
     "bitdrop_connector_postgres",
+    "bitdrop_store_redis",
 ]
 
 [[tool.importlinter.contracts]]
@@ -133,6 +139,6 @@ type = "layers"
 # Names on one line separated by "|" are siblings: independent of each other.
 # Everything may import from a layer below it, never from one above or beside it.
 layers = [
-    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file | bitdrop_metadata_memory | bitdrop_metadata_sqlite | bitdrop_connector_memory | bitdrop_connector_postgres",
+    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file | bitdrop_metadata_memory | bitdrop_metadata_sqlite | bitdrop_connector_memory | bitdrop_connector_postgres | bitdrop_store_redis",
     "bitdrop_api",
 ]

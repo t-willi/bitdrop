@@ -11,6 +11,7 @@ from bitdrop_api.errors import (
     LeaseLost,
     MetadataStoreError,
     StoreFull,
+    StoreUnavailable,
     UnknownChunk,
 )
 from bitdrop_api.metadata_store import Claim, Stage
@@ -33,6 +34,25 @@ class TestHierarchy:
         """Keys and ids are validated by both kinds of store, so the error is shared."""
         assert not issubclass(InvalidKey, ChunkStoreError)
         assert not issubclass(InvalidKey, MetadataStoreError)
+
+
+class TestStoreUnavailable:
+    def test_is_a_chunk_store_error(self) -> None:
+        assert issubclass(StoreUnavailable, ChunkStoreError)
+
+    def test_names_the_key_when_one_was_involved(self) -> None:
+        error = StoreUnavailable("connection refused", key="job-1:c7")
+
+        assert error.key == "job-1:c7"
+        assert "connection refused" in str(error)
+        assert "job-1:c7" in str(error)
+
+    def test_needs_no_key_for_operations_without_one(self) -> None:
+        error = StoreUnavailable("timed out")
+
+        assert error.key is None
+        assert "timed out" in str(error)
+        assert "key=" not in str(error)
 
 
 class TestMessages:

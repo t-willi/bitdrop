@@ -29,9 +29,9 @@ class InvalidKey(BitdropError):
 class ChunkStoreError(BitdropError):
     """Base class of errors raised by a :class:`~bitdrop_api.chunk_store.ChunkStore`."""
 
-    def __init__(self, key: str, message: str) -> None:
-        """Create the error for ``key`` with a human-readable ``message``."""
-        super().__init__(f"{message} (key={key!r})")
+    def __init__(self, key: str | None, message: str) -> None:
+        """Create the error for ``key`` (``None`` if no key was involved) with a ``message``."""
+        super().__init__(message if key is None else f"{message} (key={key!r})")
         self.key = key
 
 
@@ -59,6 +59,17 @@ class StoreFull(ChunkStoreError):
     def __init__(self, key: str) -> None:
         """Create the error for the ``key`` that could not be stored."""
         super().__init__(key, "store is full")
+
+
+class StoreUnavailable(ChunkStoreError):
+    """A networked store could not be reached, or refused a request for a reason besides capacity.
+
+    The request may be retried; the chunk-level retry logic of the runner does exactly that.
+    """
+
+    def __init__(self, detail: str, *, key: str | None = None) -> None:
+        """Create the error; ``detail`` says what went wrong (never include secrets)."""
+        super().__init__(key, f"chunk store unavailable: {detail}")
 
 
 class MetadataStoreError(BitdropError):

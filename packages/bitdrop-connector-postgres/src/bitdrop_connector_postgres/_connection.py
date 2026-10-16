@@ -10,12 +10,12 @@ import threading
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import adbc_driver_manager
 import adbc_driver_postgresql.dbapi as adbc
 
 from bitdrop_api.errors import ConnectorError
+from bitdrop_api.urls import parse_network_url
 
 DEFAULT_POOL_SIZE = 4
 _BITDROP_OPTIONS = ("bitdrop_pool_size",)
@@ -45,53 +45,12 @@ def parse_connection_url(url: str) -> ConnectionSettings:
     Raises:
         ValueError: wrong scheme, or a bad ``bitdrop_*`` option.
     """
-    parts = urlsplit(url)
-    if parts.scheme not in _SCHEMES:
-        raise ValueError(f"expected a postgresql:// URL, got scheme {parts.scheme!r}")
-
-    libpq_options: list[tuple[str, str]] = []
-    pool_size = DEFAULT_POOL_SIZE
-    for name, value in parse_qsl(parts.query, keep_blank_values=True):
-        if not name.startswith("bitdrop_"):
-            libpq_options.append((name, value))
-        elif name == "bitdrop_pool_size":
-            try:
-                pool_size = int(value)
-            except ValueError:
-                pool_size = 0
-            if pool_size < 1:
-                raise ValueError(f"bitdrop_pool_size must be a positive integer, got {value!r}")
-        else:
-            raise ValueError(f"unknown option {name!r} (allowed: {', '.join(_BITDROP_OPTIONS)})")
-
-    uri = urlunsplit(
-        (
-            parts.scheme,
-            parts.netloc,
-            parts.path,
-            urlencode(libpq_options, quote_via=quote),
-            parts.fragment,
-        )
+    parsed = parse_network_url(url, schemes=_SCHEMES, options=_BITDROP_OPTIONS)
+    return ConnectionSettings(
+        uri=parsed.url,
+        pool_size=parsed.int_option("bitdrop_pool_size", default=DEFAULT_POOL_SIZE),
+        redacted=parsed.redacted,
     )
-    return ConnectionSettings(uri=uri, pool_size=pool_size, redacted=_redact(uri))
-
-
-def _redact(uri: str) -> str:
-    parts = urlsplit(uri)
-    netloc = parts.netloc
-    userinfo, at, hostport = netloc.rpartition("@")
-    user, colon, password = userinfo.partition(":")
-    if at and colon and password:
-        netloc = f"{user}:***@{hostport}"
-    query = urlencode(
-        [
-            (k, "***" if k.lower() == "password" else v)
-            for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        ],
-        safe="*",
-        quote_via=quote,
-    )
-    return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
 
 
 class ConnectionPool:
