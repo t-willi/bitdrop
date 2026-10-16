@@ -3,7 +3,9 @@ name = "bitdrop-api"
 version = "0.1.0"
 description = "Contracts (ports), shared types, and the conformance kit for bitdrop components."
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "pyarrow>=26.0.0",
+]
 
 [project.optional-dependencies]
 # Needed only by the conformance kit in `bitdrop_api.testing`.

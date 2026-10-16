@@ -20,6 +20,7 @@ dev = [
     "bitdrop-api[testing]",
     "import-linter>=2.0",
     "mypy>=1.10",
+    "pyarrow-stubs>=20.0.0.20260819",
     "pytest>=8",
     "pytest-asyncio>=1.0",
     "ruff>=0.6",

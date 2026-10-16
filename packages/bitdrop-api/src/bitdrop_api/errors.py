@@ -88,3 +88,45 @@ class UnknownChunk(MetadataStoreError):
         super().__init__(f"unknown chunk {chunk_id!r} in job {job_id!r}")
         self.job_id = job_id
         self.chunk_id = chunk_id
+
+
+class ConnectorError(BitdropError):
+    """Base class of errors raised by a source or destination connector."""
+
+
+class TableNotFound(ConnectorError):
+    """The source table does not exist (or is not visible to the configured user)."""
+
+    def __init__(self, table: str) -> None:
+        """Create the error for ``table``."""
+        super().__init__(f"table not found: {table!r}")
+        self.table = table
+
+
+class UnsupportedType(ConnectorError):
+    """A column has a type the connector cannot move without losing information.
+
+    Raised while planning, before any data moves: failing loudly beats silently degrading a type
+    (for example turning ``numeric`` into text) in the destination.
+    """
+
+    def __init__(self, table: str, column: str, native_type: str, hint: str = "") -> None:
+        """Create the error for ``column`` of ``table`` whose type is ``native_type``."""
+        message = f"column {column!r} of {table!r} has unsupported type {native_type!r}"
+        super().__init__(f"{message}. {hint}" if hint else message)
+        self.table = table
+        self.column = column
+        self.native_type = native_type
+
+
+class SchemaMismatch(ConnectorError):
+    """The destination table exists but does not match the schema being loaded."""
+
+
+class TableNotPrepared(ConnectorError):
+    """A chunk was written to a destination table that ``prepare`` was never called for."""
+
+    def __init__(self, table: str) -> None:
+        """Create the error for ``table``."""
+        super().__init__(f"destination table {table!r} was not prepared; call prepare() first")
+        self.table = table
