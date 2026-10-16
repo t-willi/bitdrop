@@ -12,6 +12,7 @@ import pyarrow as pa
 import pytest
 from typer.testing import CliRunner
 
+from bitdrop_api.plan import encode_plan
 from bitdrop_api.source import ChunkSpec, SourcePlan
 from bitdrop_cli.app import app
 from bitdrop_cli.plain import create_ui as create_plain_ui
@@ -52,6 +53,16 @@ chunk_mib = 0.1
 extractors = 2
 loaders = 2
 """
+
+
+async def save_a_plan(metadata_url: str, job_id: str, *, table: str) -> None:
+    """Leave a plan for ``table`` in the metadata store, as an earlier run of the job would have."""
+    store = registry.open_metadata_store(metadata_url)
+    try:
+        plan = SourcePlan(table, pa.schema([pa.field("id", pa.int64())]), ())
+        await store.save_plan(job_id, encode_plan(plan))
+    finally:
+        await store.aclose()
 
 
 def job_file(
@@ -155,6 +166,17 @@ class TestRun:
         assert result.exit_code == 3
         assert "error:" in result.stderr
         assert "nope" in result.stderr
+        assert "Traceback" not in result.stderr
+
+    def test_a_job_id_saved_for_another_table_is_refused_with_advice(self, tmp_path: Path) -> None:
+        url = f"sqlite://{tmp_path}/state.db"
+        asyncio.run(save_a_plan(url, "orders-1", table="elsewhere"))
+
+        result = invoke("run", str(job_file(tmp_path, metadata_url=url)), "--ui", "plain")
+
+        assert result.exit_code == 3
+        assert "elsewhere" in result.stderr
+        assert "new job id" in result.stderr
         assert "Traceback" not in result.stderr
 
     def test_a_connector_that_is_not_installed_is_a_configuration_error(

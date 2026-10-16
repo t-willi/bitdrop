@@ -157,7 +157,7 @@ Steps:
       commit: the kit tests fail for an adapter without them; watch them fail first).
 - [x] 5. `run_transfer` loads, saves, and resumes from the plan; integration tests: resume after the table changed uses
       the saved chunks, another table is refused, no `Source.plan` call on resume.
-- [ ] 6. Mutation checks (`scripts/mutation_check.sh`) on steps 2 to 5; strengthen tests for any survivor.
+- [x] 6. Mutation checks (`scripts/mutation_check.sh`) on steps 2 to 5; strengthen tests for any survivor.
 - [ ] 7. Update this log (sections 2, 3, 4, 5, 6), `docs/development.md` if it lists contract methods; full `make check`
       with Docker; set the test counts.
 
