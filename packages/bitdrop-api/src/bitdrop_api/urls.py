@@ -9,6 +9,7 @@ configuration. This module gives adapters one shared, strict way to read such UR
   whose URL is mostly the client library's business.
 """
 
+import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
@@ -143,21 +144,39 @@ def parse_network_url(
             parts.fragment,
         )
     )
-    return NetworkUrl(url=client_url, redacted=_redact(client_url), options=bitdrop_options)
+    return NetworkUrl(url=client_url, redacted=redact_url(client_url), options=bitdrop_options)
 
 
-def _redact(url: str) -> str:
-    """Replace passwords (in the user info and in a ``password`` query option) with ``***``."""
-    parts = urlsplit(url)
-    userinfo, at, hostport = parts.netloc.rpartition("@")
-    user, colon, password = userinfo.partition(":")
-    netloc = f"{user}:***@{hostport}" if at and colon and password else parts.netloc
-    query = urlencode(
-        [
-            (name, "***" if name.lower() == "password" else value)
-            for name, value in parse_qsl(parts.query, keep_blank_values=True)
-        ],
+def redact_url(url: str) -> str:
+    """Return ``url`` with passwords as ``***`` (in the user info and in a ``password`` option).
+
+    Safe to print, log, and put in error messages. A URL without a password comes back exactly as
+    it was. Anything that cannot be read as ``scheme://...`` is replaced wholesale rather than
+    echoed, because it may still contain a secret.
+    """
+    if not _URL_START.match(url):
+        return _UNREADABLE
+    try:
+        parts = urlsplit(url)
+        userinfo, at, hostport = parts.netloc.rpartition("@")
+        user, colon, password = userinfo.partition(":")
+        query = parse_qsl(parts.query, keep_blank_values=True)
+    except ValueError:
+        return _UNREADABLE
+
+    has_userinfo_password = bool(at and colon and password)
+    has_query_password = any(name.lower() == "password" for name, _ in query)
+    if not (has_userinfo_password or has_query_password):
+        return url
+
+    netloc = f"{user}:***@{hostport}" if has_userinfo_password else parts.netloc
+    redacted_query = urlencode(
+        [(name, "***" if name.lower() == "password" else value) for name, value in query],
         safe="*",
         quote_via=quote,
     )
-    return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
+    return urlunsplit((parts.scheme, netloc, parts.path, redacted_query, parts.fragment))
+
+
+_URL_START = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+_UNREADABLE = "<unreadable URL>"

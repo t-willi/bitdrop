@@ -30,6 +30,7 @@ from bitdrop_api.destination import Destination
 from bitdrop_api.errors import BitdropError
 from bitdrop_api.metadata_store import MetadataStore
 from bitdrop_api.source import Source
+from bitdrop_core.ui import ProgressUi, UiContext
 
 CHUNK_STORE_GROUP = "bitdrop.chunk_stores"
 """Entry point group under which chunk store adapters register."""
@@ -43,6 +44,9 @@ SOURCE_GROUP = "bitdrop.sources"
 DESTINATION_GROUP = "bitdrop.destinations"
 """Entry point group under which destination connectors register."""
 
+UI_GROUP = "bitdrop.uis"
+"""Entry point group under which progress displays register (selected by name, not by URL)."""
+
 ChunkStoreFactory = Callable[[str], ChunkStore]
 """Builds a chunk store from the full URL it was selected with."""
 
@@ -54,6 +58,9 @@ SourceFactory = Callable[[str], Source]
 
 DestinationFactory = Callable[[str], Destination]
 """Builds a destination from the full URL (usually a database connection string)."""
+
+UiFactory = Callable[[UiContext], ProgressUi]
+"""Builds a progress display for one job."""
 
 
 class UnknownComponent(BitdropError):
@@ -102,6 +109,7 @@ _CHUNK_STORES = _Kind("chunk store", CHUNK_STORE_GROUP, ChunkStore)
 _METADATA_STORES = _Kind("metadata store", METADATA_STORE_GROUP, MetadataStore)
 _SOURCES = _Kind("source", SOURCE_GROUP, Source)
 _DESTINATIONS = _Kind("destination", DESTINATION_GROUP, Destination)
+_UIS = _Kind("progress UI", UI_GROUP, ProgressUi)
 
 
 def available_chunk_stores() -> list[str]:
@@ -122,6 +130,11 @@ def available_sources() -> list[str]:
 def available_destinations() -> list[str]:
     """Return the URL schemes of all installed destination connectors, sorted."""
     return _available(_DESTINATIONS)
+
+
+def available_uis() -> list[str]:
+    """Return the names of all installed progress displays, sorted."""
+    return _available(_UIS)
 
 
 def open_chunk_store(
@@ -170,6 +183,19 @@ def open_destination(
     return cast(Destination, _open(_DESTINATIONS, url, factories))
 
 
+def open_ui(
+    name: str, context: UiContext, *, factories: Mapping[str, UiFactory] | None = None
+) -> ProgressUi:
+    """Open the progress display called ``name`` for the job described by ``context``.
+
+    Displays are chosen by name rather than by URL. Errors are those of :func:`open_chunk_store`.
+    """
+    ui = _find_factory(_UIS, name, factories)(context)
+    if not isinstance(ui, ProgressUi):
+        raise InvalidComponent(_UIS.label, name, ui)
+    return ui
+
+
 def _available(kind: _Kind) -> list[str]:
     return sorted({entry_point.name for entry_point in entry_points(group=kind.group)})
 
@@ -186,9 +212,7 @@ def _open(kind: _Kind, url: str, factories: Mapping[str, Callable[[str], object]
     return component
 
 
-def _find_factory(
-    kind: _Kind, scheme: str, factories: Mapping[str, Callable[[str], object]] | None
-) -> Callable[[str], object]:
+def _find_factory[F](kind: _Kind, scheme: str, factories: Mapping[str, F] | None) -> F:
     """Look up the factory for ``scheme``, importing only the adapter that is needed."""
     if factories is not None:
         try:
@@ -201,4 +225,4 @@ def _find_factory(
         raise AmbiguousComponent(kind.label, scheme)
     if not matches:
         raise UnknownComponent(kind.label, scheme, _available(kind))
-    return cast(Callable[[str], object], matches[0].load())
+    return cast(F, matches[0].load())
