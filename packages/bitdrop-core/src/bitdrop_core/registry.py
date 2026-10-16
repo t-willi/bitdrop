@@ -1,29 +1,41 @@
 """Find and open components by URL.
 
 The core never imports an adapter. Instead, each adapter package announces itself through a Python
-*entry point* in the group ``bitdrop.chunk_stores``::
+*entry point*, in one group per kind of component::
 
     [project.entry-points."bitdrop.chunk_stores"]
     memory = "bitdrop_store_memory:create_store"
 
-The entry point's name is the URL scheme; its target is a factory ``(url: str) -> ChunkStore``.
+    [project.entry-points."bitdrop.metadata_stores"]
+    sqlite = "bitdrop_metadata_sqlite:create_store"
+
+The entry point's name is the URL scheme; its target is a factory ``(url: str) -> <component>``.
 Installing a package is all it takes to make its scheme available, so swapping a backend is a
-configuration change (``memory://`` becomes ``file:///dev/shm/bitdrop``), not a code change.
+configuration change (``memory://`` becomes ``file:///dev/shm/bitdrop``), not a code change. Each
+kind has its own namespace: ``memory`` can be both a chunk store and a metadata store.
 """
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from importlib.metadata import entry_points
 from typing import cast
 from urllib.parse import urlsplit
 
 from bitdrop_api.chunk_store import ChunkStore
 from bitdrop_api.errors import BitdropError
+from bitdrop_api.metadata_store import MetadataStore
 
 CHUNK_STORE_GROUP = "bitdrop.chunk_stores"
 """Entry point group under which chunk store adapters register."""
 
+METADATA_STORE_GROUP = "bitdrop.metadata_stores"
+"""Entry point group under which metadata store adapters register."""
+
 ChunkStoreFactory = Callable[[str], ChunkStore]
-"""Builds a store from the full URL it was selected with."""
+"""Builds a chunk store from the full URL it was selected with."""
+
+MetadataStoreFactory = Callable[[str], MetadataStore]
+"""Builds a metadata store from the full URL it was selected with."""
 
 
 class UnknownComponent(BitdropError):
@@ -54,9 +66,32 @@ class InvalidComponent(BitdropError):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _Kind:
+    """One kind of pluggable component."""
+
+    label: str
+    """Human-readable name, used in error messages."""
+
+    group: str
+    """Entry point group its adapters register under."""
+
+    contract: type
+    """The runtime-checkable protocol a factory's result must satisfy."""
+
+
+_CHUNK_STORES = _Kind("chunk store", CHUNK_STORE_GROUP, ChunkStore)
+_METADATA_STORES = _Kind("metadata store", METADATA_STORE_GROUP, MetadataStore)
+
+
 def available_chunk_stores() -> list[str]:
     """Return the URL schemes of all installed chunk store adapters, sorted."""
-    return sorted({entry_point.name for entry_point in entry_points(group=CHUNK_STORE_GROUP)})
+    return _available(_CHUNK_STORES)
+
+
+def available_metadata_stores() -> list[str]:
+    """Return the URL schemes of all installed metadata store adapters, sorted."""
+    return _available(_METADATA_STORES)
 
 
 def open_chunk_store(
@@ -75,30 +110,48 @@ def open_chunk_store(
         AmbiguousComponent: more than one installed adapter handles the scheme.
         InvalidComponent: the adapter's factory did not return a ChunkStore.
     """
+    return cast(ChunkStore, _open(_CHUNK_STORES, url, factories))
+
+
+def open_metadata_store(
+    url: str, *, factories: Mapping[str, MetadataStoreFactory] | None = None
+) -> MetadataStore:
+    """Open the metadata store selected by ``url``.
+
+    Arguments and errors are those of :func:`open_chunk_store`.
+    """
+    return cast(MetadataStore, _open(_METADATA_STORES, url, factories))
+
+
+def _available(kind: _Kind) -> list[str]:
+    return sorted({entry_point.name for entry_point in entry_points(group=kind.group)})
+
+
+def _open(kind: _Kind, url: str, factories: Mapping[str, Callable[[str], object]] | None) -> object:
+    """Resolve the URL's scheme to a factory, call it, and check the result's contract."""
     parts = urlsplit(url)
     if not parts.scheme or not url.startswith(f"{parts.scheme}://"):
         raise ValueError(f"expected a URL starting with a scheme like 'memory://', got {url!r}")
 
-    factory = _find_factory(parts.scheme, factories)
-    store = factory(url)
-    if not isinstance(store, ChunkStore):
-        raise InvalidComponent("chunk store", parts.scheme, store)
-    return store
+    component = _find_factory(kind, parts.scheme, factories)(url)
+    if not isinstance(component, kind.contract):
+        raise InvalidComponent(kind.label, parts.scheme, component)
+    return component
 
 
 def _find_factory(
-    scheme: str, factories: Mapping[str, ChunkStoreFactory] | None
-) -> ChunkStoreFactory:
+    kind: _Kind, scheme: str, factories: Mapping[str, Callable[[str], object]] | None
+) -> Callable[[str], object]:
     """Look up the factory for ``scheme``, importing only the adapter that is needed."""
     if factories is not None:
         try:
             return factories[scheme]
         except KeyError:
-            raise UnknownComponent("chunk store", scheme, sorted(factories)) from None
+            raise UnknownComponent(kind.label, scheme, sorted(factories)) from None
 
-    matches = [e for e in entry_points(group=CHUNK_STORE_GROUP) if e.name == scheme]
+    matches = [e for e in entry_points(group=kind.group) if e.name == scheme]
     if len(matches) > 1:
-        raise AmbiguousComponent("chunk store", scheme)
+        raise AmbiguousComponent(kind.label, scheme)
     if not matches:
-        raise UnknownComponent("chunk store", scheme, available_chunk_stores())
-    return cast(ChunkStoreFactory, matches[0].load())
+        raise UnknownComponent(kind.label, scheme, _available(kind))
+    return cast(Callable[[str], object], matches[0].load())

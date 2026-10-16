@@ -11,6 +11,8 @@ dependencies = [
     "bitdrop-core",
     "bitdrop-store-memory",
     "bitdrop-store-file",
+    "bitdrop-metadata-memory",
+    "bitdrop-metadata-sqlite",
 ]
 
 [dependency-groups]
@@ -34,6 +36,8 @@ bitdrop-api = { workspace = true }
 bitdrop-core = { workspace = true }
 bitdrop-store-memory = { workspace = true }
 bitdrop-store-file = { workspace = true }
+bitdrop-metadata-memory = { workspace = true }
+bitdrop-metadata-sqlite = { workspace = true }
 
 # ---------------------------------------------------------------------------------------------
 # pytest
@@ -61,6 +65,8 @@ known-first-party = [
     "bitdrop_core",
     "bitdrop_store_memory",
     "bitdrop_store_file",
+    "bitdrop_metadata_memory",
+    "bitdrop_metadata_sqlite",
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -84,6 +90,8 @@ mypy_path = [
     "packages/bitdrop-core/src",
     "packages/bitdrop-store-memory/src",
     "packages/bitdrop-store-file/src",
+    "packages/bitdrop-metadata-memory/src",
+    "packages/bitdrop-metadata-sqlite/src",
 ]
 
 # ---------------------------------------------------------------------------------------------
@@ -95,6 +103,8 @@ root_packages = [
     "bitdrop_core",
     "bitdrop_store_memory",
     "bitdrop_store_file",
+    "bitdrop_metadata_memory",
+    "bitdrop_metadata_sqlite",
 ]
 
 [[tool.importlinter.contracts]]
@@ -103,6 +113,6 @@ type = "layers"
 # Names on one line separated by "|" are siblings: independent of each other.
 # Everything may import from a layer below it, never from one above or beside it.
 layers = [
-    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file",
+    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file | bitdrop_metadata_memory | bitdrop_metadata_sqlite",
     "bitdrop_api",
 ]

@@ -11,6 +11,8 @@ members = [
     "bitdrop",
     "bitdrop-api",
     "bitdrop-core",
+    "bitdrop-metadata-memory",
+    "bitdrop-metadata-sqlite",
     "bitdrop-store-file",
     "bitdrop-store-memory",
 ]
@@ -86,6 +88,8 @@ source = { virtual = "." }
 dependencies = [
     { name = "bitdrop-api" },
     { name = "bitdrop-core" },
+    { name = "bitdrop-metadata-memory" },
+    { name = "bitdrop-metadata-sqlite" },
     { name = "bitdrop-store-file" },
     { name = "bitdrop-store-memory" },
 ]
@@ -104,6 +108,8 @@ dev = [
 requires-dist = [
     { name = "bitdrop-api", editable = "packages/bitdrop-api" },
     { name = "bitdrop-core", editable = "packages/bitdrop-core" },
+    { name = "bitdrop-metadata-memory", editable = "packages/bitdrop-metadata-memory" },
+    { name = "bitdrop-metadata-sqlite", editable = "packages/bitdrop-metadata-sqlite" },
     { name = "bitdrop-store-file", editable = "packages/bitdrop-store-file" },
     { name = "bitdrop-store-memory", editable = "packages/bitdrop-store-memory" },
 ]
@@ -140,6 +146,28 @@ provides-extras = ["testing"]
 name = "bitdrop-core"
 version = "0.1.0"
 source = { editable = "packages/bitdrop-core" }
+dependencies = [
+    { name = "bitdrop-api" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "bitdrop-api", editable = "packages/bitdrop-api" }]
+
+[[package]]
+name = "bitdrop-metadata-memory"
+version = "0.1.0"
+source = { editable = "packages/bitdrop-metadata-memory" }
+dependencies = [
+    { name = "bitdrop-api" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "bitdrop-api", editable = "packages/bitdrop-api" }]
+
+[[package]]
+name = "bitdrop-metadata-sqlite"
+version = "0.1.0"
+source = { editable = "packages/bitdrop-metadata-sqlite" }
 dependencies = [
     { name = "bitdrop-api" },
 ]

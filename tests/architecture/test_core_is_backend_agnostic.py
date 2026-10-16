@@ -10,7 +10,17 @@ from pathlib import Path
 
 import pytest
 
-BACKEND_NAMES = ("redis", "valkey", "memcache", "dragonfly", "garnet", "keydb", "bitdrop_store_")
+BACKEND_NAMES = (
+    "redis",
+    "valkey",
+    "memcache",
+    "dragonfly",
+    "garnet",
+    "keydb",
+    "sqlite",
+    "bitdrop_store_",
+    "bitdrop_metadata_",
+)
 """Lower-case fragments that must not appear in the code of backend-agnostic packages."""
 
 AGNOSTIC_PACKAGES = ("bitdrop_api", "bitdrop_core")
@@ -66,6 +76,8 @@ class TestTheScannerItself:
             pytest.param("store = backends.Dragonfly", id="attribute"),
             pytest.param("class RedisStore: ...", id="class-name"),
             pytest.param("from bitdrop_store_memory import x", id="adapter-package"),
+            pytest.param("import sqlite3", id="sqlite"),
+            pytest.param("from bitdrop_metadata_memory import x", id="metadata-adapter-package"),
         ],
     )
     def test_detects_backend_names_in_code(self, source: str) -> None:

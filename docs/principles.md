@@ -14,7 +14,7 @@ change (and a different image)**, never a code change in the core or in another 
 | Source connector | `Source`: plan/split a table, read a chunk as record batches | Postgres, MySQL, … |
 | Destination connector | `Destination`: prepare, write a chunk idempotently, verify | Postgres, ClickHouse, Parquet/S3, … |
 | Chunk store (data plane) | `ChunkStore`: put/get/delete a blob by key | Redis, Valkey, Dragonfly, Garnet, memcached, pod-local tmpfs, Arrow Flight peers |
-| Metadata store | `MetadataStore`: atomic compare-and-set, leases, list by state | Redis, Valkey, etcd, Postgres, SQLite (local runs) |
+| Metadata store | `MetadataStore`: register / claim / heartbeat / complete / fail chunks, with leases and fencing | In-memory, SQLite (built); Redis, Postgres, etcd (planned) |
 | Chunk codec | `ChunkCodec`: encode/decode record batches | Arrow IPC + zstd / lz4 |
 | Memory governor | `Governor`: admission control over byte credits | credit-based, … |
 | Provisioner / scaler | `Provisioner`: add/remove workers and data-plane capacity | Kubernetes, local processes, cloud VMs |
@@ -50,8 +50,18 @@ capability is intentionally absent until `get` can return a handle instead of `b
 - A chunk missing from the store (eviction, restart) is handled by resetting it to `PENDING`. Silently corrupted or
   partial data is never acceptable.
 
-The `MetadataStore` contract is **stricter** than a plain key:value store. It needs atomic compare-and-set, leases
-(TTL or equivalent), and a way to list chunks by state. Plain get/set is not enough.
+The `MetadataStore` contract is **domain-level, not a generic key:value store**. The central operation is "give me
+one pending chunk", which needs an index by state; over a plain compare-and-set KV store every claim would scan every
+chunk (about 160k for a 10 TB job). So the contract names the operations (`register_chunks`, `claim`, `heartbeat`,
+`complete`, `fail`, `release_expired`, `get_chunk`, `counts`), each adapter implements them with its native atomics
+(SQL transactions, Redis Lua, ...), and one conformance kit pins the semantics for all of them. The authoritative
+definition is `packages/bitdrop-api/src/bitdrop_api/metadata_store.py`. Its two crash-safety mechanisms:
+
+- **Leases**: a claim is valid for a limited time and renewed by `heartbeat`. If the worker dies, the master's
+  `release_expired` puts the chunk back and counts one failure.
+- **Fencing**: every claim carries a number that grows with each claim of that chunk. After a chunk was released and
+  claimed again, the previous holder's calls fail with `LeaseLost`, so a slow "zombie" worker can never overwrite the
+  new owner's work.
 
 ### Rule 2: enforced by code
 

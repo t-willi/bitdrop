@@ -105,6 +105,10 @@ PENDING ──claim──▶ EXTRACTING ──put──▶ EXTRACTED ──claim
 Metadata Redis alone cannot guarantee "no duplicate rows": a loader can commit to the destination and die *before* it
 marks the chunk `LOADED`. The reaper then re-queues it and the rows land twice. Options (can be combined):
 
+> **Status (2026-10-16):** the chunk state machine, leases, and fencing exist as the `MetadataStore` contract and two
+> adapters, and a pipeline test shows a dead *extractor* causes neither loss nor duplicates. The destination-side
+> protection below, which closes the "loader committed, then died" window, is **not built yet**.
+
 1. **Ledger in the destination**: write `chunk_id` into a `_bitdrop_chunks` table *in the same transaction* as the
    data. Loader checks/inserts the ledger row atomically with the load.
 2. **Idempotent chunk load**: `DELETE WHERE chunk range` + `INSERT`, or upsert on primary key, or a deterministic
