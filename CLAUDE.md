@@ -23,5 +23,8 @@ make check       # lint + strict types + architecture rules + every test (some n
   alter data: store a value exactly or refuse it loudly (P2).
 - Clean, documented code; one workspace package per component; steps documented in `docs/`.
 - Run `make check` before committing. Committing without asking is allowed once it passes.
+- Commit small and often, so any step can be reverted alone: one logical change per commit, each passing `make check`
+  on its own. A test goes in with the code that makes it pass; a refactor, a tooling fix, a doc update, and a bug found
+  on the way are separate commits. Never batch a session's work into one big commit.
 - Tell the user when a milestone test succeeds. Do not touch Docker containers the tests did not start.
 - Keep secrets out of messages and logs.

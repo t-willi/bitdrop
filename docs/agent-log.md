@@ -83,6 +83,7 @@ section 12.
 | 2026-10-16 | One adapter serves every Redis-protocol server; run them with persistence off and `noeviction` | The source is the durable copy; a snapshot fork can double memory; a full server should push back, not drop chunks |
 | 2026-10-16 | The loader deletes the staged blob before marking the chunk complete; all chunk store calls share `chunk_timeout` | Deleting after completion leaked blobs on a crash; a stalled connection would otherwise hang a worker whose heartbeat keeps its lease alive |
 | 2026-10-16 | The user allows committing without asking first | Their instruction; still run `make check` before every commit |
+| 2026-10-16 | Commit small and often: one logical change per commit, each green on its own | The user's instruction after the CLI and TUI session produced a few large commits; small ones are easy to revert |
 | 2026-10-16 | `run_transfer` takes an optional observer that receives typed events; it only watches (an observer that raises is logged once and ignored) | One feed for every display; a broken UI must never change what reaches the destination |
 | 2026-10-16 | `MetadataStore.release(claim)` hands a chunk back without counting a failure; cancelling `run_transfer` releases every held chunk, including a claim granted while the worker was being cancelled | A stop used to leave leases (60 s by default) that blocked an immediate resume and cost one of three attempts each |
 | 2026-10-16 | Displays are components found by name (entry point group `bitdrop.uis`, contract `ProgressUi`); `bitdrop-cli` and `bitdrop-tui` are separate packages above the core that import no adapter and not each other | P1; role images never need a UI toolkit; adding a display changes no line of the command |
@@ -202,6 +203,9 @@ These come from the user and from lessons in this project.
   public, steps documented in `docs/`.
 - **Commit without asking** once the checks pass, with a descriptive message ending in the co-author trailer. Never skip
   `make check`.
+- **Commit small and often.** One logical change per commit, each passing `make check` on its own, so any step can be
+  reverted alone. A test goes in with the code that makes it pass; a refactor, a tooling fix, a doc update, and a bug
+  found on the way are separate commits. Do not batch a session's work into one big commit.
 - **Tell the user when a milestone test succeeds** (for example the first real source-to-destination copy).
 - **P1**: a component never depends on another's implementation; new backends are new packages with a conformance test.
   **P2**: store a value exactly or refuse it loudly.
@@ -265,7 +269,7 @@ At the end of every session or milestone, before the final commit:
    real hash (a commit cannot contain its own hash).
 4. Move finished items out of section 5 (delete them; the history is in section 4) and add what you discovered.
 5. Record decisions in section 3, new limits in section 6, new traps in section 8.
-6. Commit the log together with the code it describes.
+6. Commit a log update with the small change it describes; a larger refresh of the log is a commit of its own.
 
 `tests/architecture/test_agent_log.py` fails if a required section disappears, if a package under `packages/` is not
 mentioned, or if the log points at a file that does not exist. Passing it does not prove the log is complete; that part
