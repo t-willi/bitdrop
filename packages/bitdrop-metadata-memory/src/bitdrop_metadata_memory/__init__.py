@@ -119,6 +119,12 @@ class MemoryMetadataStore:
         retry_state = ChunkState.PENDING if reextract else claim.stage.waiting
         self._record_failure(job, claim.chunk_id, chunk, reason, retry_state)
 
+    async def release(self, claim: Claim) -> None:
+        """Hand a claimed chunk back without a failure; see :meth:`MetadataStore.release`."""
+        job, chunk = self._held(claim)
+        job.move(claim.chunk_id, chunk, claim.stage.waiting)
+        chunk.worker_id = None
+
     async def release_expired(self, job_id: str) -> int:
         """Void claims whose lease ran out; see :meth:`MetadataStore.release_expired`."""
         validate_key(job_id)

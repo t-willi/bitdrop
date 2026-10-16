@@ -64,7 +64,7 @@ Each step is test first, ends with `make check`, and is committed.
 Updated as the work proceeds; see the agent log for the authoritative state.
 
 - [x] 1 progress events
-- [ ] 2 release on stop
+- [x] 2 release on stop
 - [ ] 3 CLI
 - [ ] 4 end-to-end through the CLI
 - [ ] 5 TUI

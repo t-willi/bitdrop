@@ -53,12 +53,13 @@ capability is intentionally absent until `get` can return a handle instead of `b
 The `MetadataStore` contract is **domain-level, not a generic key:value store**. The central operation is "give me
 one pending chunk", which needs an index by state; over a plain compare-and-set KV store every claim would scan every
 chunk (about 160k for a 10 TB job). So the contract names the operations (`register_chunks`, `claim`, `heartbeat`,
-`complete`, `fail`, `release_expired`, `get_chunk`, `counts`), each adapter implements them with its native atomics
+`complete`, `fail`, `release`, `release_expired`, `get_chunk`, `counts`), each adapter implements them with its native atomics
 (SQL transactions, Redis Lua, ...), and one conformance kit pins the semantics for all of them. The authoritative
 definition is `packages/bitdrop-api/src/bitdrop_api/metadata_store.py`. Its two crash-safety mechanisms:
 
 - **Leases**: a claim is valid for a limited time and renewed by `heartbeat`. If the worker dies, the master's
-  `release_expired` puts the chunk back and counts one failure.
+  `release_expired` puts the chunk back and counts one failure. A worker that stops on purpose (a shutdown signal)
+  calls `release` instead, which hands the chunk back at once and counts nothing.
 - **Fencing**: every claim carries a number that grows with each claim of that chunk. After a chunk was released and
   claimed again, the previous holder's calls fail with `LeaseLost`, so a slow "zombie" worker can never overwrite the
   new owner's work.

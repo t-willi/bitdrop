@@ -359,6 +359,102 @@ class MetadataStoreConformance:
         with pytest.raises(LeaseLost):
             await store.fail(claim, "too late")
 
+    # -- releasing ------------------------------------------------------------------------------
+
+    async def test_releasing_an_extraction_returns_the_chunk_to_pending_without_a_failure(
+        self, store: MetadataStore
+    ) -> None:
+        """A worker that stops on purpose hands the chunk back; nothing counts against it."""
+        await _register(store, 1)
+        claim = await _claim(store)
+
+        await store.release(claim)
+
+        record = await store.get_chunk(JOB, claim.chunk_id)
+        assert (record.state, record.failures) == (ChunkState.PENDING, 0)
+        assert (record.worker_id, record.last_error) == (None, None)
+        assert (await _claim(store)).chunk_id == claim.chunk_id
+
+    async def test_releasing_a_load_returns_the_chunk_to_extracted(
+        self, store: MetadataStore
+    ) -> None:
+        """The extracted data is still staged, so the chunk waits for another loader."""
+        await _register(store, 1)
+        await _extract_one(store)
+        claim = await _claim(store, Stage.LOAD)
+
+        await store.release(claim)
+
+        record = await store.get_chunk(JOB, claim.chunk_id)
+        assert (record.state, record.failures, record.worker_id) == (ChunkState.EXTRACTED, 0, None)
+        assert (await _claim(store, Stage.LOAD)).chunk_id == claim.chunk_id
+
+    async def test_a_released_chunk_keeps_its_earlier_failures_and_error(
+        self, store: MetadataStore
+    ) -> None:
+        """Releasing adds nothing and erases nothing."""
+        await _register(store, 1)
+        await store.fail(await _claim(store), "boom")
+
+        await store.release(await _claim(store))
+
+        record = await store.get_chunk(JOB, "c000")
+        assert (record.state, record.failures, record.last_error) == (
+            ChunkState.PENDING,
+            1,
+            "boom",
+        )
+
+    async def test_releasing_never_uses_up_the_attempts(self, store: MetadataStore) -> None:
+        """However often a job is stopped and resumed, its chunks do not run out of attempts."""
+        await _register(store, 1, max_attempts=1)
+
+        for _ in range(5):
+            await store.release(await _claim(store))
+
+        record = await store.get_chunk(JOB, "c000")
+        assert (record.state, record.failures) == (ChunkState.PENDING, 0)
+
+    async def test_releasing_fences_out_the_old_holder(self, store: MetadataStore) -> None:
+        """After release and re-claim, the old claim can do nothing; the new one can."""
+        await _register(store, 1)
+        stopped = await _claim(store, worker="stopped")
+        await store.release(stopped)
+        owner = await _claim(store, worker="owner")
+
+        with pytest.raises(LeaseLost):
+            await store.complete(stopped)
+        with pytest.raises(LeaseLost):
+            await store.heartbeat(stopped, lease_seconds=30)
+        with pytest.raises(LeaseLost):
+            await store.fail(stopped, "late")
+        with pytest.raises(LeaseLost):
+            await store.release(stopped)
+        await store.complete(owner)
+
+        assert (await store.get_chunk(JOB, "c000")).state is ChunkState.EXTRACTED
+
+    async def test_releasing_with_a_stale_claim_raises_lease_lost(
+        self, store: MetadataStore
+    ) -> None:
+        """A worker that already completed cannot release: the chunk is not its to give back."""
+        await _register(store, 1)
+        claim = await _extract_one(store)
+
+        with pytest.raises(LeaseLost):
+            await store.release(claim)
+
+        assert (await store.get_chunk(JOB, claim.chunk_id)).state is ChunkState.EXTRACTED
+
+    async def test_a_released_chunk_is_not_voided_by_the_reaper(self, store: MetadataStore) -> None:
+        """The spent lease must not be mistaken for an expired one and counted as a failure."""
+        await _register(store, 1)
+        await store.release(await _claim(store, lease=SHORT_LEASE))
+        await asyncio.sleep(PAST_SHORT_LEASE)
+
+        assert await store.release_expired(JOB) == 0
+        assert (await store.get_chunk(JOB, "c000")).failures == 0
+
     # -- leases ---------------------------------------------------------------------------------
 
     async def test_release_expired_requeues_chunks_whose_lease_ran_out(

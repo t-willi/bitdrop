@@ -5,6 +5,7 @@ that fails, a destination that commits and then 'dies', a store that loses a blo
 """
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +20,7 @@ from bitdrop_api.errors import (
     StoreFull,
     TableNotFound,
 )
-from bitdrop_api.metadata_store import ChunkState, MetadataStore, Stage
+from bitdrop_api.metadata_store import ChunkState, Claim, MetadataStore, Stage
 from bitdrop_api.source import ChunkSpec, SourcePlan
 from bitdrop_api.testing import make_rows
 from bitdrop_connector_memory import MemoryDestination, MemorySource
@@ -446,6 +447,141 @@ class TestCrashAfterCompletion:
         assert resumed.succeeded
         assert copied(w).equals(make_rows(1, 1000))
         assert list((tmp_path / "chunks").iterdir()) == [], "a staged chunk was leaked"
+
+
+# -- stopping on purpose --------------------------------------------------------------------------
+
+
+class GateSource(MemorySource):
+    """Reads block until the test opens the gate, so workers can be caught mid-chunk."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.open = asyncio.Event()
+        self.waiting = 0
+
+    async def read_chunk(self, plan: SourcePlan, chunk: ChunkSpec) -> pa.Table:
+        self.waiting += 1
+        await self.open.wait()
+        return await super().read_chunk(plan, chunk)
+
+
+class GateDestination(MemoryDestination):
+    """Writes block until the test opens the gate, so loaders can be caught mid-chunk."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.open = asyncio.Event()
+        self.waiting = 0
+
+    async def write_chunk(self, job_id: str, chunk_id: str, table: str, data: pa.Table):  # type: ignore[no-untyped-def]
+        self.waiting += 1
+        await self.open.wait()
+        return await super().write_chunk(job_id, chunk_id, table, data)
+
+
+async def stop_when(w: World, ready: Callable[[], bool], cfg: TransferConfig) -> None:
+    """Start the job, wait until ``ready()``, then cancel it and wait for the cleanup to finish."""
+    job = asyncio.create_task(run(w, cfg))
+    async with asyncio.timeout(TIMEOUT):
+        while not ready():  # noqa: ASYNC110  (polls a counter the workers bump)
+            await asyncio.sleep(0.005)
+    job.cancel()
+    with suppress(asyncio.CancelledError):
+        await job
+
+
+async def assert_nothing_is_held_and_nothing_failed(w: World) -> None:
+    counts = await w.meta.counts("job-1")
+    assert counts[ChunkState.EXTRACTING] == counts[ChunkState.LOADING] == 0, dict(counts)
+    for index in range(sum(counts.values())):
+        record = await w.meta.get_chunk("job-1", f"c{index:06d}")
+        assert (record.failures, record.worker_id) == (0, None), record
+
+
+class TestStoppingOnPurpose:
+    """Cancelling a run (Ctrl-C, SIGTERM, 'q' in the TUI) hands every held chunk back at once.
+
+    The leases here are long on purpose (a minute, like the default). A stop that left its leases
+    behind would make the resumed run wait for them, and every voided lease would cost an attempt.
+    """
+
+    async def test_chunks_being_extracted_are_handed_back_without_a_failure(self) -> None:
+        source = GateSource()
+        w = world(source=source, rows=1000)
+        cfg = config(lease_seconds=60.0, extractors=3)
+
+        await stop_when(w, lambda: source.waiting >= 3, cfg)
+
+        await assert_nothing_is_held_and_nothing_failed(w)
+        assert (await w.meta.counts("job-1"))[ChunkState.PENDING] == 10
+
+    async def test_chunks_being_loaded_are_handed_back_without_a_failure(self) -> None:
+        destination = GateDestination()
+        w = world(destination=destination, rows=1000)
+        cfg = config(lease_seconds=60.0, loaders=3)
+
+        await stop_when(w, lambda: destination.waiting >= 3, cfg)
+
+        await assert_nothing_is_held_and_nothing_failed(w)
+        assert (await w.meta.counts("job-1"))[ChunkState.LOADED] == 0
+
+    async def test_the_job_resumes_at_once_and_finishes_with_every_row_once(self) -> None:
+        source = GateSource()
+        w = world(source=source, rows=1000)
+        cfg = config(lease_seconds=60.0, extractors=3)
+        await stop_when(w, lambda: source.waiting >= 3, cfg)
+
+        resumed = world(
+            source=MemorySource(),
+            destination=w.destination,
+            chunks=w.chunks,
+            meta=w.meta,
+            rows=1000,
+        )
+        report = await run(resumed, cfg)  # would wait a minute for the leases if they were kept
+
+        assert report.succeeded
+        assert copied(w).equals(make_rows(1, 1000))
+        assert report.chunks_failed == 0
+
+    async def test_stopping_a_finished_job_is_harmless(self) -> None:
+        w = world(rows=300)
+        await run(w)
+
+        await stop_when(w, lambda: True, config())
+
+        assert (await w.meta.counts("job-1"))[ChunkState.LOADED] == 3
+
+
+class CrashedProcessMetadata(MemoryMetadataStore):
+    """A process that was killed cannot hand anything back: its claims are simply abandoned."""
+
+    async def release(self, claim: Claim) -> None:
+        return None
+
+
+class TestCrashing:
+    """The other way a run ends: no cleanup at all. Only the leases can recover the chunks."""
+
+    async def test_abandoned_leases_are_voided_by_the_reaper_and_the_job_finishes(self) -> None:
+        source = GateSource()
+        w = world(source=source, meta=CrashedProcessMetadata(), rows=1000)
+        await stop_when(w, lambda: source.waiting >= 3, config(lease_seconds=0.3, extractors=3))
+        assert (await w.meta.counts("job-1"))[ChunkState.EXTRACTING] == 3, "the crash left no trace"
+
+        resumed = world(
+            source=MemorySource(),
+            destination=w.destination,
+            chunks=w.chunks,
+            meta=w.meta,
+            rows=1000,
+        )
+        report = await run(resumed, config(lease_seconds=0.3, reaper_interval=0.02))
+
+        assert report.succeeded
+        assert copied(w).equals(make_rows(1, 1000))
+        assert (await w.meta.get_chunk("job-1", "c000000")).failures == 1, "a lost lease costs one"
 
 
 # -- resuming -------------------------------------------------------------------------------------

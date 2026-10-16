@@ -5,6 +5,7 @@ This is the *coordination* port. It tracks every chunk through the pipeline::
     PENDING --claim(EXTRACT)--> EXTRACTING --complete--> EXTRACTED
     EXTRACTED --claim(LOAD)--> LOADING --complete--> LOADED
     any in-flight state --fail / lease expiry--> back to waiting, or FAILED when attempts run out
+    any in-flight state --release--> back to waiting, no failure counted (a worker stops on purpose)
 
 Why a domain-level contract instead of a generic compare-and-set key:value store? The central
 operation, "give me one pending chunk", needs an index by state. Over a plain KV store every claim
@@ -174,6 +175,19 @@ class MetadataStore(Protocol):
         The chunk returns to the start of the claimed stage, or becomes ``FAILED`` if it has used
         up its attempts. With ``reextract=True`` a *load* claim sends the chunk all the way back to
         ``PENDING``, for when its data vanished from the chunk store.
+
+        Raises:
+            LeaseLost: the claim is no longer valid.
+        """
+        ...
+
+    async def release(self, claim: Claim) -> None:
+        """Hand a claimed chunk back, unfinished, without counting a failure.
+
+        For a worker that stops on purpose (a shutdown signal): the chunk returns to the start of
+        the claimed stage, its failure count and last error stay as they were, and it can be claimed
+        again at once instead of waiting for the lease to run out. The old claim is spent, as after
+        ``complete`` or ``fail``.
 
         Raises:
             LeaseLost: the claim is no longer valid.

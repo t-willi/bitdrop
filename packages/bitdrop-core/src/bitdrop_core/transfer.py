@@ -408,32 +408,53 @@ class _Transfer:
             await self._process(claim, handler)
 
     async def _process(self, claim: Claim, handler: Callable[[Claim], Awaitable[_Outcome]]) -> None:
-        """Run ``handler`` for the claim while keeping its lease alive; report any failure."""
-        began = time.monotonic()
-        self._notify(ChunkStarted(claim.chunk_id, claim.stage, claim.worker_id))
+        """Run ``handler`` for the claim while keeping its lease alive; report any failure.
+
+        If the run is stopped meanwhile (the task is cancelled), the chunk is handed back at once.
+        """
         async with self._keep_alive(claim):
             try:
-                outcome = await handler(claim)
-            except LeaseLost:
-                _LOG.info(
-                    "%s: lease lost on chunk %s; the new owner takes over",
-                    claim.worker_id,
-                    claim.chunk_id,
+                await self._attempt(claim, handler)
+            except asyncio.CancelledError:
+                await self._hand_back(claim)
+                raise
+
+    async def _attempt(self, claim: Claim, handler: Callable[[Claim], Awaitable[_Outcome]]) -> None:
+        began = time.monotonic()
+        self._notify(ChunkStarted(claim.chunk_id, claim.stage, claim.worker_id))
+        try:
+            outcome = await handler(claim)
+        except LeaseLost:
+            _LOG.info(
+                "%s: lease lost on chunk %s; the new owner takes over",
+                claim.worker_id,
+                claim.chunk_id,
+            )
+        except Exception as error:
+            await self._fail(claim, error)
+        else:
+            self._notify(
+                ChunkFinished(
+                    chunk_id=claim.chunk_id,
+                    stage=claim.stage,
+                    worker=claim.worker_id,
+                    rows=outcome.rows,
+                    bytes=outcome.bytes,
+                    seconds=time.monotonic() - began,
+                    already_loaded=outcome.already_loaded,
                 )
-            except Exception as error:
-                await self._fail(claim, error)
-            else:
-                self._notify(
-                    ChunkFinished(
-                        chunk_id=claim.chunk_id,
-                        stage=claim.stage,
-                        worker=claim.worker_id,
-                        rows=outcome.rows,
-                        bytes=outcome.bytes,
-                        seconds=time.monotonic() - began,
-                        already_loaded=outcome.already_loaded,
-                    )
-                )
+            )
+
+    async def _hand_back(self, claim: Claim) -> None:
+        """Give an unfinished chunk back so the next run can take it at once, at no cost.
+
+        Without this its lease would have to run out first, and that would count as a failure.
+        Best effort: if the claim is already spent, or the metadata store cannot be reached, the
+        lease expires as it would after a crash, which is just slower.
+        """
+        with suppress(Exception):
+            async with asyncio.timeout(self._config.chunk_timeout):
+                await self._meta.release(claim)
 
     async def _fail(self, claim: Claim, error: Exception) -> None:
         reason = (

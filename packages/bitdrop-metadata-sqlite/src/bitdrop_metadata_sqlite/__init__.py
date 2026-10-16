@@ -179,6 +179,20 @@ class SqliteMetadataStore:
 
         await self._transaction(work)
 
+    async def release(self, claim: Claim) -> None:
+        """Hand a claimed chunk back without a failure; see :meth:`MetadataStore.release`."""
+
+        def work(connection: sqlite3.Connection) -> None:
+            cursor = connection.execute(
+                "UPDATE chunks SET state = ?, worker_id = NULL, lease_expires = NULL"
+                f" WHERE {_HELD}",
+                (claim.stage.waiting, *_held_params(claim)),
+            )
+            if cursor.rowcount == 0:
+                raise LeaseLost(claim)
+
+        await self._transaction(work)
+
     async def release_expired(self, job_id: str) -> int:
         """Void claims whose lease ran out; see :meth:`MetadataStore.release_expired`."""
         validate_key(job_id)
