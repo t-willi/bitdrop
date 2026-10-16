@@ -26,12 +26,16 @@ The master, extractors, and loaders are *roles*. They know only the contracts ab
 The `ChunkStore` contract is deliberately tiny, so that **any in-memory key:value store works**:
 
 ```
-put(key, bytes)        overwrite allowed
-get(key)               bytes or a zero-copy handle; NotFound is a normal result
-delete(key)            idempotent
-capabilities()         max_value_bytes, zero_copy, locality (pod | node | cluster), memory_stats, ...
-stats()                optional: used_bytes, max_bytes
+async put(key, bytes)  overwrite allowed
+async get(key)         bytes; ChunkNotFound is a normal result
+async delete(key)      idempotent
+capabilities()         max_value_bytes, locality (pod | node | cluster), memory_stats
+async stats()          optional: used_bytes, max_bytes
+async aclose()         release connections
 ```
+
+The authoritative definition is the code: `packages/bitdrop-api/src/bitdrop_api/chunk_store.py`. A `zero_copy`
+capability is intentionally absent until `get` can return a handle instead of `bytes`.
 
 - Nothing Redis-specific (Lua, Streams, pub/sub, server-side TTL, transactions) may be used on the data plane.
   Coordination lives in the metadata store, never in the chunk store.
@@ -69,7 +73,7 @@ The `MetadataStore` contract is **stricter** than a plain key:value store. It ne
 
 - One component, one image, one responsibility. Roles (master, extractor, loader) are images too.
 - Everything is configured through environment, arguments, or mounted config, for example
-  `BITDROP_CHUNK_STORE=redis://…`, `memcached://…`, `shm:///dev/shm/bitdrop`. No config means no assumption.
+  `BITDROP_CHUNK_STORE=redis://…`, `memcached://…`, `file:///dev/shm/bitdrop`. No config means no assumption.
 - Backing services are **stock upstream images, never forked or patched**. If a store needs a patch, it is not
   compliant.
 - Every image exposes health/readiness and metrics, and drains leases on SIGTERM.
@@ -95,8 +99,11 @@ How P1 is realised in Python. The decision is Python; the tooling named below is
 - **Discovery**: `importlib.metadata` entry points (groups such as `bitdrop.chunk_stores`). Each adapter is its own
   distributable package exposing a factory, selected by URL scheme from config. Core never imports an adapter.
 - **Dependency rule**: `import-linter` contracts (layers and forbidden imports), run in CI.
-- **Conformance kit**: shipped as a pytest plugin from the contracts package. Each adapter's tests parameterize it,
-  with real backends started through testcontainers.
+- **Conformance kit**: shipped as a base test class (`bitdrop_api.testing.ChunkStoreConformance`). An adapter's tests
+  subclass it and override one `store` fixture; pytest then runs every contract test against that adapter. Backends
+  that need a server are started through testcontainers.
+- **Async contracts**: `ChunkStore` methods are coroutines (asyncio), matching the "load asynchronously" requirement.
+  Blocking drivers are wrapped with `asyncio.to_thread` inside their adapter.
 - **Config**: pydantic models validate runtime config and the component manifest.
 - **Layout**: monorepo as a `uv` workspace, one package per component, one image per role built from the workspace.
 - **Hot path**: no per-row Python. Chunks stay in Arrow buffers from the source driver to the destination driver, and

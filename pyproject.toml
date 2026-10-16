@@ -1,7 +1,108 @@
 [project]
 name = "bitdrop"
 version = "0.1.0"
-description = "Add your description here"
+description = "Very fast bulk data transfer between databases using an elastic in-RAM staging tier."
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+# The root project is a virtual "meta" project: it only pulls in every workspace member so that
+# `uv sync` gives one environment containing all components.
+dependencies = [
+    "bitdrop-api",
+    "bitdrop-core",
+    "bitdrop-store-memory",
+    "bitdrop-store-file",
+]
+
+[dependency-groups]
+dev = [
+    "bitdrop-api[testing]",
+    "import-linter>=2.0",
+    "mypy>=1.10",
+    "pytest>=8",
+    "pytest-asyncio>=1.0",
+    "ruff>=0.6",
+]
+
+# ---------------------------------------------------------------------------------------------
+# Workspace: one package per component (see docs/principles.md, P1)
+# ---------------------------------------------------------------------------------------------
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+bitdrop-api = { workspace = true }
+bitdrop-core = { workspace = true }
+bitdrop-store-memory = { workspace = true }
+bitdrop-store-file = { workspace = true }
+
+# ---------------------------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["packages", "tests"]
+# importlib mode: test files in different packages may share a basename without clashing.
+addopts = "-ra --strict-markers --import-mode=importlib"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+# ---------------------------------------------------------------------------------------------
+# ruff (lint + format)
+# ---------------------------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT", "ASYNC", "C4", "D"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "bitdrop_api",
+    "bitdrop_core",
+    "bitdrop_store_memory",
+    "bitdrop_store_file",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests describe themselves through their names; docstrings are optional there.
+"**/tests/**" = ["D", "ASYNC240"]
+"tests/**" = ["D", "ASYNC240"]
+"conftest.py" = ["D"]
+
+# ---------------------------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.14"
+strict = true
+explicit_package_bases = true
+mypy_path = [
+    "packages/bitdrop-api/src",
+    "packages/bitdrop-core/src",
+    "packages/bitdrop-store-memory/src",
+    "packages/bitdrop-store-file/src",
+]
+
+# ---------------------------------------------------------------------------------------------
+# import-linter: the architecture rules of P1 ("every component is exchangeable")
+# ---------------------------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = [
+    "bitdrop_api",
+    "bitdrop_core",
+    "bitdrop_store_memory",
+    "bitdrop_store_file",
+]
+
+[[tool.importlinter.contracts]]
+name = "Core and adapters depend on the contracts, never on each other"
+type = "layers"
+# Names on one line separated by "|" are siblings: independent of each other.
+# Everything may import from a layer below it, never from one above or beside it.
+layers = [
+    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file",
+    "bitdrop_api",
+]
