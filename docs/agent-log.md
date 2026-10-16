@@ -123,11 +123,48 @@ failing, a race test that caught a non-atomic write only 4 times in 5).
 
 Nothing here is started unless marked. Roughly in the order I would do it.
 
+**IN PROGRESS: persist the chunk plan** (backlog item 1). A session that finds this block continues at the first
+unticked step; tick a step in the same commit that finishes it. Every step is one commit that passes `make check`.
+
+Design (decided 2026-10-16):
+
+- The metadata store keeps the plan as **opaque bytes**, so adapters know nothing about Arrow or sources (P1).
+  Two new operations on `MetadataStore`: `save_plan(job_id, plan)` stores the bytes only if the job has none yet and
+  returns the bytes that are stored (first writer wins, so two masters cannot disagree); `load_plan(job_id)` returns
+  them, or `None`.
+- Turning a `SourcePlan` into bytes and back is `bitdrop_api.plan` (`encode_plan`, `decode_plan`): JSON with a format
+  version, the Arrow schema as base64 IPC (keeps field metadata, so native-type hints survive), the chunk specs, the
+  estimates, the notes. A payload that is not JSON is refused loudly at encode time (P2); garbage or an unknown version
+  raises `CorruptPlan`.
+- `run_transfer` first calls `load_plan`. If a plan is stored it is used and `Source.plan` is not called: a resumed job
+  reads exactly the chunks it registered, even if the table changed meanwhile. If the stored plan is for another source
+  table the run is refused (`PlanMismatch`: use a new job id). Otherwise it plans, calls `save_plan`, and uses what
+  `save_plan` returns. The plan is saved *before* `register_chunks`, so a crash between the two leaves a plan and no
+  chunks, which is harmless.
+- The source kit gains a check that every chunk payload survives a JSON round trip unchanged (tuples would silently
+  become lists otherwise).
+
+Steps:
+
+- [x] 0. This plan, committed first so a handover is always possible.
+- [ ] 1. Housekeeping: section 4 says "this commit" for the CLI/TUI log update; give it its real hash and add `c202940`.
+- [ ] 2. `bitdrop_api.plan` with tests: round trip (schema metadata, nested types, payloads, notes, estimates), garbage,
+      unknown version, non-JSON payload.
+- [ ] 3. Source kit: payloads survive a JSON round trip; make sure both connectors pass.
+- [ ] 4. `MetadataStore.save_plan` / `load_plan` in the contract, the kit, and the memory and SQLite adapters (one
+      commit: the kit tests fail for an adapter without them; watch them fail first).
+- [ ] 5. `run_transfer` loads, saves, and resumes from the plan; integration tests: resume after the table changed uses
+      the saved chunks, another table is refused, no `Source.plan` call on resume.
+- [ ] 6. Mutation checks (`scripts/mutation_check.sh`) on steps 2 to 5; strengthen tests for any survivor.
+- [ ] 7. Update this log (sections 2, 3, 4, 5, 6), `docs/development.md` if it lists contract methods; full `make check`
+      with Docker; set the test counts.
+
+Then continue with the rest of "Next up".
+
 **Next up**
 
-1. **Persist the chunk plan** (the `ChunkSpec` payloads are already JSON-friendly) in the metadata store, so
-   extractors and loaders can run as separate processes or containers. Today `run_transfer` keeps the plan in its own
-   memory.
+1. *(in progress, see above)* **Persist the chunk plan**, so extractors and loaders can run as separate processes or
+   containers. Today `run_transfer` keeps the plan in its own memory.
 2. **Role entry points and containers**: one image per role (master, extractor, loader), Kubernetes manifests. P1 says
    every function gets its own container; none exists yet.
 3. **Memory governor**: byte-credit admission control, a hard `maxmemory` backstop, scaling workers. Today only simple
