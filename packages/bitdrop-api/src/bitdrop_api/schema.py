@@ -17,9 +17,9 @@ NATIVE_TYPE_KEY = b"bitdrop:native_type"
 
 def with_native_type(field: pa.Field[Any], engine: str, native_type: str) -> pa.Field[Any]:
     """Return ``field`` with a hint that its native type in ``engine`` is ``native_type``."""
-    metadata: dict[bytes | str, bytes | str] = {
-        key: value for key, value in (field.metadata or {}).items()
-    }
+    metadata: dict[bytes | str, bytes | str] = {}
+    for key, value in (field.metadata or {}).items():
+        metadata[key] = value
     metadata[ENGINE_KEY] = engine.encode()
     metadata[NATIVE_TYPE_KEY] = native_type.encode()
     return field.with_metadata(metadata)

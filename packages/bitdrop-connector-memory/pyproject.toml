@@ -1,0 +1,19 @@
+[project]
+name = "bitdrop-connector-memory"
+version = "0.1.0"
+description = "Source and Destination connectors that keep Arrow tables in this process's memory. For tests and demos."
+requires-python = ">=3.14"
+dependencies = ["bitdrop-api"]
+
+[project.entry-points."bitdrop.sources"]
+memory = "bitdrop_connector_memory:create_source"
+
+[project.entry-points."bitdrop.destinations"]
+memory = "bitdrop_connector_memory:create_destination"
+
+[tool.uv.sources]
+bitdrop-api = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"

@@ -130,3 +130,11 @@ class TableNotPrepared(ConnectorError):
         """Create the error for ``table``."""
         super().__init__(f"destination table {table!r} was not prepared; call prepare() first")
         self.table = table
+
+
+class CorruptChunk(BitdropError):
+    """The bytes handed to a ``ChunkCodec`` are not a valid, complete chunk."""
+
+    def __init__(self, reason: str) -> None:
+        """Create the error; ``reason`` says what the codec found wrong."""
+        super().__init__(f"corrupt chunk: {reason}")

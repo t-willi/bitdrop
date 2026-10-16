@@ -2,8 +2,8 @@
 
 The crucial property is **idempotent chunk writes**. A loader can crash after committing a chunk
 but before telling the metadata store; the chunk is then loaded a second time. The destination
-makes that harmless by recording ``(job_id, chunk_id)`` in a *ledger* in the same transaction as the
-data, and skipping chunks it has already recorded.
+makes that harmless by recording ``(job_id, table, chunk_id)`` in a *ledger* in the same
+transaction as the data, and skipping chunks it has already recorded.
 """
 
 from dataclasses import dataclass
@@ -29,7 +29,7 @@ class Destination(Protocol):
 
     Behaviour every implementation must provide (verified by the conformance kit):
 
-    * ``write_chunk`` is idempotent per ``(job_id, chunk_id)``, also under concurrent calls.
+    * ``write_chunk`` is idempotent per ``(job_id, table, chunk_id)``, also under concurrent calls.
     * A chunk is written atomically with its ledger entry: both happen or neither does.
     * ``prepare`` may be called again for an existing, matching table without losing data.
     """
@@ -45,7 +45,7 @@ class Destination(Protocol):
     async def write_chunk(
         self, job_id: str, chunk_id: str, table: str, data: pa.Table
     ) -> ChunkWrite:
-        """Append ``data`` to ``table`` exactly once for this ``(job_id, chunk_id)``.
+        """Append ``data`` to ``table`` exactly once for this ``(job_id, table, chunk_id)``.
 
         Raises:
             InvalidKey: a job id or chunk id breaks the key rules.
@@ -54,7 +54,11 @@ class Destination(Protocol):
         ...
 
     async def count_rows(self, table: str) -> int:
-        """Return the number of rows currently in ``table``."""
+        """Return the number of rows currently in ``table``.
+
+        Raises:
+            TableNotPrepared: ``prepare`` was never called for ``table``.
+        """
         ...
 
     async def aclose(self) -> None:
