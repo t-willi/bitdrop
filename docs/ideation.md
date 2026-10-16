@@ -2,6 +2,8 @@
 
 Status: **draft 1** · 2026-10-15 · nothing is decided; this is the thinking-out-loud document.
 
+Binding design principles (starting with: every component is exchangeable) live in [principles.md](principles.md).
+
 ## 1. Pitch
 
 A bulk data-movement tool (think Airbyte, but for *throughput*) that puts an **elastic, in-RAM staging tier** between
@@ -133,6 +135,20 @@ command dispatch (see 7.1). "Limited only by source and destination" is only tru
 bottleneck. Plan: shard chunks across K data nodes (client-side hashing or Redis Cluster) and benchmark the stores in
 7.2. Treat any per-node GB/s figure as an assumption until measured.
 
+**Python on the hot path.** Python is the main language. This works because the design moves chunks (16–128 MB), not
+rows: at 10 GB/s that is only a few hundred chunk operations per second, which is trivial orchestration overhead. The
+rule that makes it hold is *no per-row Python*: data stays in Arrow buffers from the source driver to the destination
+driver, and native libraries move the bytes (pyarrow, ADBC drivers or ConnectorX, psycopg `COPY`, hiredis-backed
+clients). Things to design for:
+
+- **GIL**: driver calls, (de)compression, and socket I/O release it, so threads or asyncio are enough for I/O fan-out;
+  CPU-heavy steps belong in native code or worker processes. Do not rely on free-threaded builds.
+- **Scaling** is by containers anyway (more pods, not more threads in one process), which suits Python.
+- **Copies**: a Python client can copy a 64 MB value several times (command building, socket buffers). Use
+  `memoryview` and pyarrow buffers wherever the client allows, and measure client-side overhead in H1.
+- **Memory**: pyarrow's memory pool tracks Arrow allocations; the governor must account for Python-side buffers too.
+- **Escape hatch**: a hot adapter (codec, store client) can later become a native extension behind the same contract.
+
 **Is Redis the right data plane at all?** Not as a given. Put a `ChunkStore` interface in front and compare the
 options in section 7. Object-storage staging (S3/GCS Parquet) remains the durable, cheap, slower baseline and is the
 natural path for warehouse destinations.
@@ -164,9 +180,24 @@ safe.
 BigQuery / Databricks want files in object storage plus a bulk-load command. For warehouses the loader will stage
 files anyway — the RAM tier's job there is to assemble well-sized files without hammering the source longer.
 
-**Type system.** Need one canonical intermediate representation. Apache Arrow is the obvious candidate: columnar,
-compressible (zstd/lz4), zero-copy to Parquet and to ADBC/COPY paths, and a lot of source drivers already emit it
-(ADBC, ConnectorX).
+**Data model and libraries (decided 2026-10-16).** bitdrop moves data; it does not transform it, so the question is
+what format is in flight, not which dataframe library to compute with. Decision: **Apache Arrow via pyarrow is the one
+canonical format** for types, in-flight batches, chunk encoding (Arrow IPC), and Parquet I/O.
+
+| Library | Role |
+|---|---|
+| pyarrow | Canonical in-flight format (record batches), IPC chunk encoding, Parquet I/O. Required. |
+| ADBC, ConnectorX | Drivers that read/write Arrow directly. Used inside source/destination adapters. |
+| pandas | Not on the hot path (copies, weaker type fidelity, memory heavy). Only at the edge of an adapter whose driver forces it. |
+| Polars, DuckDB | Not needed in v1. Candidates for later, optional transform/verify components behind a contract. |
+
+- Contracts are typed on Arrow (`Source` yields record batches, `Destination` consumes them). Arrow is the one shared
+  data model; it is a language-neutral standard, and its C stream interface keeps adapters free to use pyarrow, Polars,
+  or a native extension.
+- Source type mapping into Arrow (Oracle `NUMBER`, MySQL unsigned ints, Postgres `numeric` without precision,
+  timezone-aware timestamps, `jsonb`, arrays) is per-adapter work and needs explicit tests.
+- Compression trade-off: zstd/lz4 shrink the RAM footprint (RAM is the cost driver) but cost CPU, and `mmap`
+  zero-copy reads only work on uncompressed IPC files. `ChunkCodec` is exchangeable so this can be tuned per job (H6).
 
 **Connector breadth.** Airbyte's moat is hundreds of connectors. We cannot compete on count. The wedge is *depth
 and speed on a few* sources/destinations; breadth is a later question (possibly wrapping Singer/Airbyte connectors
@@ -263,11 +294,12 @@ extract and load fleets, billed as a short burst.**
 
 | # | Claim | Experiment |
 |---|---|---|
-| H1 | A dedicated in-memory data plane sustains ≥ the faster of source/dest for 16–64 MB chunks | Producers/consumers benchmark across Redis, Valkey, Dragonfly, memcached; 1 node vs sharded; chunk size sweep |
+| H1 | A dedicated in-memory data plane sustains ≥ the faster of source/dest for 16–64 MB chunks | Producers/consumers benchmark across Redis, Valkey, Dragonfly, memcached; 1 node vs sharded; chunk size sweep; use the real Python clients, since client-side copies count |
 | H2 | Decoupling reduces *source-hold time* and/or total time vs direct streaming | Postgres → slow-ish destination, compare bitdrop vs a direct pipe (Sling/pgcopydb) at equal parallelism |
 | H3 | Chunk state + destination ledger gives zero duplicates and zero losses under crashes | Chaos test: `kill -9` random workers/master/data node mid-run, verify row counts + checksums |
 | H4 | Row-size estimator is within ±30 % on realistic schemas | Run against a few wide-column datasets; compare estimate vs actual serialized bytes |
 | H5 | Pod-local tmpfs (A) vs dedicated store (C): where is the crossover? | Same job, `ChunkStore` swapped, vary dataset size and dest speed |
+| H6 | Compression pays for itself: RAM saved outweighs CPU cost and lost zero-copy | Same job with uncompressed, lz4, zstd IPC; compare ratio, CPU, and end-to-end time on real column mixes |
 
 If H1 fails badly, the architecture changes (in-process buffer or sharding becomes mandatory). Cheapest and most
 decisive experiment to run first.
@@ -277,8 +309,8 @@ decisive experiment to run first.
 1. **Primary use case** — one-off migrations / initial loads, recurring full refreshes, or a path to incremental/CDC?
 2. **Where it runs** — ephemeral cloud (which cloud?), on-prem, or developer laptop → big VM?
 3. **First source/destination pair** to build and benchmark against?
-4. **Language** — Rust (tokio + arrow-rs, no GC with GBs in flight), Go (ADBC/Sling-style ecosystem, simpler), or
-   Python for a fast prototype?
+4. ~~**Language**~~ — **decided: Python** (2026-10-16). See "Python on the hot path" in section 6 and
+   [principles.md](principles.md).
 5. **Open source vs product** — affects license choices (Redis vs Valkey) and connector strategy.
 6. **Elastic provisioning** — should bitdrop itself spin up and tear down the data-plane nodes, or just consume
    whatever RAM it is pointed at (and leave provisioning to Terraform/k8s)?
@@ -286,3 +318,5 @@ decisive experiment to run first.
    destination acceptable?
 8. **Buffer span** — is a buffer bounded by one (very large) node per pod acceptable, or must a single job's buffer
    span multiple nodes? This decides whether option A is enough or B/C is required.
+9. **Plugin mechanism** — in-process adapters (fast, one language) or out-of-process plugins over gRPC/Arrow Flight
+   (language-agnostic, isolated, extra hop)? See open questions in [principles.md](principles.md).
