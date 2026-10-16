@@ -113,7 +113,9 @@ section 12.
 | 2026-10-16 | `7e300a9` | `JobTracker`, number formatting, the `ProgressUi` contract and registry lookup; demo data and delays in the memory connector; public `redact_url` |
 | 2026-10-16 | `74e6e69` | The `bitdrop` command; found and fixed the lost late claim with a real-process signal test |
 | 2026-10-16 | `577aaaa` | The TUI, `examples/demo.toml`, real-database tests of the command, tooling fixes |
-| 2026-10-16 | this commit | Agent log and docs for the CLI and TUI |
+| 2026-10-16 | `b0cc9f6` | Agent log and docs for the CLI and TUI |
+| 2026-10-16 | `c202940` | Project instructions ask for small, frequent commits |
+| 2026-10-16 | `f194f46` | Plan for persisting the chunk plan, written into the log before any code |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of
@@ -147,7 +149,7 @@ Design (decided 2026-10-16):
 Steps:
 
 - [x] 0. This plan, committed first so a handover is always possible.
-- [ ] 1. Housekeeping: section 4 says "this commit" for the CLI/TUI log update; give it its real hash and add `c202940`.
+- [x] 1. Housekeeping: section 4 says "this commit" for the CLI/TUI log update; give it its real hash and add `c202940`.
 - [ ] 2. `bitdrop_api.plan` with tests: round trip (schema metadata, nested types, payloads, notes, estimates), garbage,
       unknown version, non-JSON payload.
 - [ ] 3. Source kit: payloads survive a JSON round trip; make sure both connectors pass.
