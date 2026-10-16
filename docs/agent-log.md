@@ -155,7 +155,7 @@ Steps:
 - [x] 3. Source kit: payloads survive a JSON round trip; make sure both connectors pass.
 - [x] 4. `MetadataStore.save_plan` / `load_plan` in the contract, the kit, and the memory and SQLite adapters (one
       commit: the kit tests fail for an adapter without them; watch them fail first).
-- [ ] 5. `run_transfer` loads, saves, and resumes from the plan; integration tests: resume after the table changed uses
+- [x] 5. `run_transfer` loads, saves, and resumes from the plan; integration tests: resume after the table changed uses
       the saved chunks, another table is refused, no `Source.plan` call on resume.
 - [ ] 6. Mutation checks (`scripts/mutation_check.sh`) on steps 2 to 5; strengthen tests for any survivor.
 - [ ] 7. Update this log (sections 2, 3, 4, 5, 6), `docs/development.md` if it lists contract methods; full `make check`

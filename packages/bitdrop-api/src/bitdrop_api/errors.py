@@ -101,6 +101,24 @@ class UnknownChunk(MetadataStoreError):
         self.chunk_id = chunk_id
 
 
+class PlanMismatch(MetadataStoreError):
+    """A job id that was planned for one table was asked to transfer another.
+
+    A job's plan is saved when it first runs and used again when it resumes, so the id is bound to
+    that table.
+    """
+
+    def __init__(self, job_id: str, planned_table: str, requested_table: str) -> None:
+        """Create the error for ``job_id``, saved for ``planned_table`` but asked for another."""
+        super().__init__(
+            f"job {job_id!r} was planned for table {planned_table!r}, not {requested_table!r}; "
+            "use a new job id to transfer a different table"
+        )
+        self.job_id = job_id
+        self.planned_table = planned_table
+        self.requested_table = requested_table
+
+
 class ConnectorError(BitdropError):
     """Base class of errors raised by a source or destination connector."""
 

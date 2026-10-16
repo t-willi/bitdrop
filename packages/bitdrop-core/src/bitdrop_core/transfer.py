@@ -6,7 +6,9 @@ can be plugged in; see ``docs/principles.md``.
 
 The flow, per the design in ``docs/ideation.md``:
 
-1. **Plan**: the source cuts the table into chunks; they are registered as ``PENDING``.
+1. **Plan**: the source cuts the table into chunks. The plan is saved in the metadata store and the
+   chunks are registered as ``PENDING``. A job that already has a saved plan skips the cutting and
+   uses that plan, so a resumed job finishes exactly the chunks it started with.
 2. **Extract**: extractors claim a chunk, read it, encode it, and stage the bytes in the chunk
    store.
 3. **Load**: loaders claim an extracted chunk, fetch and decode it, and write it to the destination,
@@ -29,7 +31,13 @@ from dataclasses import dataclass
 from bitdrop_api.chunk_store import ChunkStore
 from bitdrop_api.codec import ChunkCodec
 from bitdrop_api.destination import Destination
-from bitdrop_api.errors import ChunkNotFound, CorruptChunk, LeaseLost, StoreFull
+from bitdrop_api.errors import (
+    ChunkNotFound,
+    CorruptChunk,
+    LeaseLost,
+    PlanMismatch,
+    StoreFull,
+)
 from bitdrop_api.keys import validate_key
 from bitdrop_api.metadata_store import (
     DEFAULT_MAX_ATTEMPTS,
@@ -39,6 +47,7 @@ from bitdrop_api.metadata_store import (
     MetadataStore,
     Stage,
 )
+from bitdrop_api.plan import decode_plan, encode_plan
 from bitdrop_api.source import ChunkSpec, Source, SourcePlan
 from bitdrop_core.codec import ArrowIpcCodec
 from bitdrop_core.progress import (
@@ -188,7 +197,8 @@ async def run_transfer(
     """Transfer ``config.source_table`` into ``config.destination_table`` and report the result.
 
     Chunks that fail for good do not abort the run; they are listed in the report. Planning errors
-    (unknown table, unsupported column type) propagate before anything is moved.
+    (unknown table, unsupported column type) propagate before anything is moved, and so does
+    ``PlanMismatch``: a job id whose saved plan is for another table.
 
     ``observer`` receives progress events (see :mod:`bitdrop_core.progress`). It only watches: if it
     raises, the transfer carries on.
@@ -196,9 +206,7 @@ async def run_transfer(
     started = time.monotonic()
     notify = Notifier(observer, _LOG)
     target = effective_chunk_bytes(config, chunk_store)
-    plan = await source.plan(
-        config.source_table, target_chunk_bytes=target, split_column=config.split_column
-    )
+    plan = await _obtain_plan(source, metadata_store, config, target)
     for note in plan.notes:
         _LOG.warning("%s: %s", config.source_table, note)
     await destination.prepare(config.destination_table, plan.schema)
@@ -256,6 +264,38 @@ async def run_transfer(
         report.duration_seconds,
     )
     return report
+
+
+async def _obtain_plan(
+    source: Source, meta: MetadataStore, config: TransferConfig, target_chunk_bytes: int
+) -> SourcePlan:
+    """Return the job's plan: the saved one if it has one, else a new one, saved before use.
+
+    A saved plan is used as it is, even if the table has changed since: the chunks it lists are
+    the ones registered and (partly) loaded already. A new plan is saved before its chunks are
+    registered, and what ``save_plan`` answers is what counts: if another master saved a plan
+    first, this one adopts it instead of its own.
+    """
+    saved = await meta.load_plan(config.job_id)
+    if saved is not None:
+        plan = decode_plan(saved)
+        _LOG.info(
+            "job %s: resuming from the saved plan of %d chunks", config.job_id, len(plan.chunks)
+        )
+    else:
+        plan = await source.plan(
+            config.source_table,
+            target_chunk_bytes=target_chunk_bytes,
+            split_column=config.split_column,
+        )
+        encoded = encode_plan(plan)
+        kept = await meta.save_plan(config.job_id, encoded)
+        if kept != encoded:
+            _LOG.info("job %s: another master saved its plan first; using that one", config.job_id)
+            plan = decode_plan(kept)
+    if plan.table != config.source_table:
+        raise PlanMismatch(config.job_id, plan.table, config.source_table)
+    return plan
 
 
 def effective_chunk_bytes(config: TransferConfig, chunk_store: ChunkStore) -> int:
