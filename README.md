@@ -27,6 +27,7 @@ uv run pytest tests/e2e -s
 
 ## Documentation
 
+- [docs/agent-log.md](docs/agent-log.md): what is done, what is not, and why (the handoff log for new sessions)
 - [docs/development.md](docs/development.md): repository layout, commands, how to add an adapter
 - [docs/principles.md](docs/principles.md): binding design principles (every component is exchangeable)
 - [docs/ideation.md](docs/ideation.md): the idea, architecture options, risks, experiments

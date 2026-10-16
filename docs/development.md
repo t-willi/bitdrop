@@ -1,7 +1,8 @@
 # Developing bitdrop
 
 How the repository is laid out, how to run everything, and how to extend it. For *why* it is built this way, read
-[principles.md](principles.md); for the product thinking, [ideation.md](ideation.md).
+[principles.md](principles.md); for the product thinking, [ideation.md](ideation.md); for what is done and what is
+not, [agent-log.md](agent-log.md).
 
 ## Setup
 
@@ -58,6 +59,7 @@ bitdrop/
 │   ├── bitdrop-connector-memory/ Source + Destination over in-memory Arrow tables
 │   └── bitdrop-connector-postgres/ Source + Destination for PostgreSQL (ADBC); needs Docker to test
 ├── benchmarks/             Throughput measurements (not part of the normal test run)
+├── scripts/                Developer tools: mutation_check.sh, add_workspace_package.py
 └── tests/                  Tests that span packages
     ├── integration/          Swap tests, a miniature pipeline, and the transfer runner with injected faults
     ├── e2e/                  Real PostgreSQL to real PostgreSQL (Docker), verified by row fingerprints
@@ -261,3 +263,16 @@ make bench     # or: uv run pytest benchmarks -s
 Writes, reads, and deletes 128 MiB of chunks (1, 16, and 64 MiB each; 1 and 8 in flight) through the `ChunkStore`
 contract for every store, and prints one table. See the caveats in `benchmarks/test_chunk_store_throughput.py`: the
 servers run in Docker on the same machine, so read the numbers as relative.
+
+## Developer scripts
+
+| Script | Use |
+|---|---|
+| `scripts/mutation_check.sh <file> <tests> '<old>' '<new>'` | Breaks the code on purpose, runs the tests, restores the file. Exit 0 means a test noticed (good), 1 means the mutant survived (the tests are too weak). |
+| `uv run python scripts/add_workspace_package.py <dist> <module>` | Registers a new package in the root `pyproject.toml` (dependencies, uv sources, ruff, mypy, import-linter). Aborts without writing if anything is off. |
+
+## The agent log
+
+`docs/agent-log.md` is the handoff document for the next working session (human or AI): current state, decisions with
+reasons, backlog, known limits, and gotchas. Update it with every milestone; `tests/architecture/test_agent_log.py`
+fails if it loses a section, forgets a package, or points at a file that no longer exists.

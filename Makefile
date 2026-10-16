@@ -28,7 +28,7 @@ format:  ## Auto-fix lint issues and format the code
 	uv run ruff format .
 
 typecheck:  ## Static type check (strict)
-	uv run mypy packages tests benchmarks
+	uv run mypy packages tests benchmarks scripts
 
 arch:  ## Check the architecture rules (who may import whom)
 	uv run lint-imports
