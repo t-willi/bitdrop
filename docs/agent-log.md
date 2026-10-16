@@ -152,7 +152,7 @@ Steps:
 - [x] 1. Housekeeping: section 4 says "this commit" for the CLI/TUI log update; give it its real hash and add `c202940`.
 - [x] 2. `bitdrop_api.plan` with tests: round trip (schema metadata, nested types, payloads, notes, estimates), garbage,
       unknown version, non-JSON payload.
-- [ ] 3. Source kit: payloads survive a JSON round trip; make sure both connectors pass.
+- [x] 3. Source kit: payloads survive a JSON round trip; make sure both connectors pass.
 - [ ] 4. `MetadataStore.save_plan` / `load_plan` in the contract, the kit, and the memory and SQLite adapters (one
       commit: the kit tests fail for an adapter without them; watch them fail first).
 - [ ] 5. `run_transfer` loads, saves, and resumes from the plan; integration tests: resume after the table changed uses

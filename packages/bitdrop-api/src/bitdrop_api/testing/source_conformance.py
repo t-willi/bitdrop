@@ -27,6 +27,7 @@ import pytest
 
 from bitdrop_api.errors import TableNotFound
 from bitdrop_api.keys import validate_key
+from bitdrop_api.plan import decode_plan, encode_plan
 from bitdrop_api.source import Source, SourcePlan
 
 HUGE_CHUNK = 1 << 40
@@ -151,6 +152,21 @@ class SourceConformance:
         tables = await asyncio.gather(*(source.read_chunk(plan, chunk) for chunk in plan.chunks))
 
         assert _sorted(pa.concat_tables(tables)).equals(_sorted(expected))
+
+    async def test_a_saved_plan_reads_the_same_table(
+        self, source: Source, table_name: str, expected: pa.Table
+    ) -> None:
+        """A plan is saved and read back by another process; chunks read from the copy must match.
+
+        This is why a chunk payload may hold only values JSON keeps exactly (see
+        :func:`bitdrop_api.plan.encode_plan`).
+        """
+        plan = await source.plan(table_name, target_chunk_bytes=10_000)
+
+        restored = decode_plan(encode_plan(plan))
+
+        assert restored.chunks == plan.chunks
+        assert _sorted(await _read_all(source, restored)).equals(_sorted(expected))
 
     # -- edge cases -----------------------------------------------------------------------------
 
