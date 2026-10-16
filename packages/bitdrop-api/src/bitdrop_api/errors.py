@@ -149,3 +149,14 @@ class CorruptChunk(BitdropError):
     def __init__(self, reason: str) -> None:
         """Create the error; ``reason`` says what the codec found wrong."""
         super().__init__(f"corrupt chunk: {reason}")
+
+
+class CorruptPlan(BitdropError):
+    """Saved bytes are not a valid plan (see :func:`bitdrop_api.plan.decode_plan`).
+
+    The reason never repeats the input: a plan may sit in a store that anyone can write to.
+    """
+
+    def __init__(self, reason: str) -> None:
+        """Create the error; ``reason`` says what was found wrong."""
+        super().__init__(f"corrupt plan: {reason}")
