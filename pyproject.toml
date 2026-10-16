@@ -14,6 +14,7 @@ dependencies = [
     "bitdrop-metadata-memory",
     "bitdrop-metadata-sqlite",
     "bitdrop-connector-memory",
+    "bitdrop-connector-postgres",
 ]
 
 [dependency-groups]
@@ -25,6 +26,7 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=1.0",
     "ruff>=0.6",
+    "testcontainers[postgres]>=4.15.0",
 ]
 
 # ---------------------------------------------------------------------------------------------
@@ -41,6 +43,7 @@ bitdrop-store-file = { workspace = true }
 bitdrop-metadata-memory = { workspace = true }
 bitdrop-metadata-sqlite = { workspace = true }
 bitdrop-connector-memory = { workspace = true }
+bitdrop-connector-postgres = { workspace = true }
 
 # ---------------------------------------------------------------------------------------------
 # pytest
@@ -49,6 +52,7 @@ bitdrop-connector-memory = { workspace = true }
 testpaths = ["packages", "tests"]
 # importlib mode: test files in different packages may share a basename without clashing.
 addopts = "-ra --strict-markers --import-mode=importlib"
+markers = ["docker: needs a running Docker daemon (starts a PostgreSQL container)"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
@@ -71,6 +75,7 @@ known-first-party = [
     "bitdrop_metadata_memory",
     "bitdrop_metadata_sqlite",
     "bitdrop_connector_memory",
+    "bitdrop_connector_postgres",
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -97,7 +102,13 @@ mypy_path = [
     "packages/bitdrop-metadata-memory/src",
     "packages/bitdrop-metadata-sqlite/src",
     "packages/bitdrop-connector-memory/src",
+    "packages/bitdrop-connector-postgres/src",
 ]
+
+[[tool.mypy.overrides]]
+# ADBC ships neither stubs nor a py.typed marker; only these modules are exempt from checking.
+module = ["adbc_driver_postgresql.*", "adbc_driver_manager.*"]
+ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------------------------
 # import-linter: the architecture rules of P1 ("every component is exchangeable")
@@ -111,6 +122,7 @@ root_packages = [
     "bitdrop_metadata_memory",
     "bitdrop_metadata_sqlite",
     "bitdrop_connector_memory",
+    "bitdrop_connector_postgres",
 ]
 
 [[tool.importlinter.contracts]]
@@ -119,6 +131,6 @@ type = "layers"
 # Names on one line separated by "|" are siblings: independent of each other.
 # Everything may import from a layer below it, never from one above or beside it.
 layers = [
-    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file | bitdrop_metadata_memory | bitdrop_metadata_sqlite | bitdrop_connector_memory",
+    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file | bitdrop_metadata_memory | bitdrop_metadata_sqlite | bitdrop_connector_memory | bitdrop_connector_postgres",
     "bitdrop_api",
 ]

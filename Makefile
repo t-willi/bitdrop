@@ -2,7 +2,7 @@
 # the underlying command directly. `make help` lists the targets.
 
 .DEFAULT_GOAL := help
-.PHONY: help sync test lint format typecheck arch check
+.PHONY: help sync test test-fast lint format typecheck arch check
 
 help:  ## Show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -12,6 +12,9 @@ sync:  ## Create/refresh the virtual environment from uv.lock
 
 test:  ## Run the whole test suite
 	uv run pytest
+
+test-fast:  ## Run the tests that need no Docker
+	uv run pytest -m "not docker"
 
 lint:  ## Lint and check formatting (no changes made)
 	uv run ruff check .

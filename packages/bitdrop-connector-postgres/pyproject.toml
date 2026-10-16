@@ -1,0 +1,19 @@
+[project]
+name = "bitdrop-connector-postgres"
+version = "0.1.0"
+description = "PostgreSQL Source and Destination connectors built on ADBC (Arrow-native bulk transfer)."
+requires-python = ">=3.14"
+dependencies = ["bitdrop-api", "adbc-driver-manager>=1.0", "adbc-driver-postgresql>=1.0"]
+
+[project.entry-points."bitdrop.sources"]
+postgresql = "bitdrop_connector_postgres:create_source"
+
+[project.entry-points."bitdrop.destinations"]
+postgresql = "bitdrop_connector_postgres:create_destination"
+
+[tool.uv.sources]
+bitdrop-api = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
