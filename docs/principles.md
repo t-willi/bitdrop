@@ -11,11 +11,11 @@ change (and a different image)**, never a code change in the core or in another 
 
 | Component | Contract (port) | Example implementations |
 |---|---|---|
-| Source connector | `Source`: plan/split a table, read a chunk as record batches | Postgres, MySQL, … |
-| Destination connector | `Destination`: prepare, write a chunk idempotently, verify | Postgres, ClickHouse, Parquet/S3, … |
-| Chunk store (data plane) | `ChunkStore`: put/get/delete a blob by key | Redis, Valkey, Dragonfly, Garnet, memcached, pod-local tmpfs, Arrow Flight peers |
+| Source connector | `Source`: plan/split a table, read a chunk as record batches | In-memory, PostgreSQL (built); MySQL, … (planned) |
+| Destination connector | `Destination`: prepare, write a chunk idempotently (ledger), count | In-memory, PostgreSQL (built); ClickHouse, Parquet/S3, … (planned) |
+| Chunk store (data plane) | `ChunkStore`: put/get/delete a blob by key | In-memory, file/tmpfs (built); Redis, Valkey, Dragonfly, Garnet, memcached, Arrow Flight peers (planned) |
 | Metadata store | `MetadataStore`: register / claim / heartbeat / complete / fail chunks, with leases and fencing | In-memory, SQLite (built); Redis, Postgres, etcd (planned) |
-| Chunk codec | `ChunkCodec`: encode/decode record batches | Arrow IPC + zstd / lz4 |
+| Chunk codec | `ChunkCodec`: encode/decode record batches | Arrow IPC, optionally lz4 / zstd (built; injected as an object, no URL registry yet) |
 | Memory governor | `Governor`: admission control over byte credits | credit-based, … |
 | Provisioner / scaler | `Provisioner`: add/remove workers and data-plane capacity | Kubernetes, local processes, cloud VMs |
 
@@ -128,3 +128,24 @@ How P1 is realised in Python. The decision is Python; the tooling named below is
    out-of-process later.
 
 With Python, entry-point discovery makes in-process adapters nearly free, which strengthens the in-process lean.
+
+## P2. Never silently alter data
+
+A component either stores or moves a value **exactly**, or it **refuses loudly**. It never degrades,
+rounds, coerces, or "best-efforts" a value into something else without an error. Corrupted data that
+looks fine is worse than a failed job.
+
+This was learned, not assumed: an end-to-end test comparing a fingerprint of every row on both sides
+found that the PostgreSQL driver turns `NULL` elements inside arrays into `0` or `''` without any
+error. Hence the rules below.
+
+- **Fail at planning, not mid-transfer.** A source refuses columns whose type it cannot carry
+  losslessly (`UnsupportedType`) before any data moves; a type is "supported" only if the end-to-end
+  type matrix proves it round-trips bit for bit.
+- **Refuse what you cannot store exactly.** The PostgreSQL destination rejects chunks containing
+  `NULL` array elements, because the driver would alter them. The chunk fails with an explicit
+  reason; the rest of the job continues.
+- **Metadata is input too.** Native type hints from another system end up in DDL, so they are checked
+  against a whitelist before use. Identifiers are validated and always quoted.
+- **Verify, don't trust.** Transfers are checked with a fingerprint (row count plus an md5 over every
+  row's text, in key order) on both sides, and column types are compared.

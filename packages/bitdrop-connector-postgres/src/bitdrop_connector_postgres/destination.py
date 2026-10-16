@@ -14,9 +14,10 @@ source's native type hints when the source is also PostgreSQL (so ``numeric(12,2
 from typing import Any
 
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from bitdrop_api.destination import ChunkWrite
-from bitdrop_api.errors import SchemaMismatch, TableNotPrepared
+from bitdrop_api.errors import ConnectorError, SchemaMismatch, TableNotPrepared
 from bitdrop_api.keys import validate_key
 from bitdrop_api.schema import native_type
 from bitdrop_connector_postgres._connection import ConnectionPool, parse_connection_url
@@ -95,6 +96,7 @@ class PostgresDestination:
         validate_key(job_id)
         validate_key(chunk_id)
         name = parse_table_name(table)
+        _refuse_null_array_elements(table, data)
         return await self._pool.run(
             lambda connection: _write(connection, name, job_id, chunk_id, data)
         )
@@ -137,6 +139,25 @@ def _column_definition(table: str, field: pa.Field[Any]) -> str:
     else:
         sql_type = arrow_to_postgres(table, field.name, field.type)
     return f"{quote_ident(field.name)} {sql_type}{'' if field.nullable else ' NOT NULL'}"
+
+
+def _refuse_null_array_elements(table: str, data: pa.Table) -> None:
+    """Refuse chunks with NULL elements inside arrays.
+
+    The ADBC COPY writer (checked with adbc-driver-postgresql 1.12.0) stores such an element as 0
+    or '' without any error. A destination must store a value exactly or refuse it, never alter it.
+    The check runs before the database is touched, so a refused chunk leaves no trace.
+    """
+    for field in data.schema:
+        if not (pa.types.is_list(field.type) or pa.types.is_large_list(field.type)):
+            continue
+        for chunk in data.column(field.name).chunks:
+            if pc.list_flatten(chunk).null_count:
+                raise ConnectorError(
+                    f"column {field.name!r} of {table!r} contains NULL elements inside arrays; "
+                    "the PostgreSQL driver would store them as 0 or '' without an error, so "
+                    "this chunk is refused"
+                )
 
 
 def _require_table(cursor: Any, name: TableName) -> None:

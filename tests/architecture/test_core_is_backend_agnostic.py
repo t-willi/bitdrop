@@ -18,8 +18,10 @@ BACKEND_NAMES = (
     "garnet",
     "keydb",
     "sqlite",
+    "postgres",
     "bitdrop_store_",
     "bitdrop_metadata_",
+    "bitdrop_connector_",
 )
 """Lower-case fragments that must not appear in the code of backend-agnostic packages."""
 
@@ -77,6 +79,8 @@ class TestTheScannerItself:
             pytest.param("class RedisStore: ...", id="class-name"),
             pytest.param("from bitdrop_store_memory import x", id="adapter-package"),
             pytest.param("import sqlite3", id="sqlite"),
+            pytest.param("if scheme == 'postgresql':\n    pass", id="postgres-string"),
+            pytest.param("from bitdrop_connector_postgres import x", id="connector-package"),
             pytest.param("from bitdrop_metadata_memory import x", id="metadata-adapter-package"),
         ],
     )

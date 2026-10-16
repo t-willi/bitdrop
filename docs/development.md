@@ -17,7 +17,8 @@ those directly, e.g. `uv run pytest packages/bitdrop-store-file -k atomic`.
 
 | Command | What it does |
 |---|---|
-| `make test` | The whole test suite (`pytest`) |
+| `make test` | The whole test suite (`pytest`), including the tests that start PostgreSQL in Docker |
+| `make test-fast` | Everything that needs no Docker (about 5 seconds) |
 | `make lint` | `ruff` lint and format check, no changes |
 | `make format` | Auto-fix lint issues and format |
 | `make typecheck` | `mypy --strict` |
@@ -42,13 +43,21 @@ bitdrop/
 │   │   │   ├── urls.py           Strict parsing of component URLs
 │   │   │   └── testing/          Conformance kits (importable base test classes)
 │   │   └── tests/
-│   ├── bitdrop-core/             Finds adapters by URL scheme (entry points). Imports no adapter.
+│   │       (also: source.py, destination.py, codec.py, schema.py for the connector contracts)
+│   ├── bitdrop-core/             Imports no adapter. Finds them by URL scheme and runs the transfer.
+│   │   └── src/bitdrop_core/
+│   │       ├── registry.py       open_source / open_destination / open_chunk_store / open_metadata_store
+│   │       ├── transfer.py       run_transfer: plan, extract, stage, load, recover (master + workers)
+│   │       └── codec.py          Arrow IPC chunk codec (none / lz4 / zstd)
 │   ├── bitdrop-store-memory/     ChunkStore adapter: a dict in this process
 │   ├── bitdrop-store-file/       ChunkStore adapter: one file per chunk (point it at a tmpfs)
 │   ├── bitdrop-metadata-memory/  MetadataStore adapter: dicts in this process
-│   └── bitdrop-metadata-sqlite/  MetadataStore adapter: a SQLite file (persistent, multi-process)
+│   ├── bitdrop-metadata-sqlite/  MetadataStore adapter: a SQLite file (persistent, multi-process)
+│   ├── bitdrop-connector-memory/ Source + Destination over in-memory Arrow tables
+│   └── bitdrop-connector-postgres/ Source + Destination for PostgreSQL (ADBC); needs Docker to test
 └── tests/                  Tests that span packages
-    ├── integration/          Swap tests and a miniature end-to-end pipeline (see below)
+    ├── integration/          Swap tests, a miniature pipeline, and the transfer runner with injected faults
+    ├── e2e/                  Real PostgreSQL to real PostgreSQL (Docker), verified by row fingerprints
     └── architecture/         Rules like "core never names a backend"
 ```
 
@@ -62,6 +71,18 @@ Each package follows the same shape: `pyproject.toml`, `src/<import_name>/`, `te
 | Core and contracts never name a concrete backend in code | `tests/architecture/test_core_is_backend_agnostic.py` |
 | An adapter is "supported" only if it passes the conformance kit | The adapter's `test_*_conformance.py` |
 | Every installed adapter works when chosen only by URL | `tests/integration/test_swapping_chunk_stores.py`, `test_pipeline_smoke.py` |
+
+## Tests that use Docker
+
+Tests marked `docker` start one throwaway PostgreSQL container for the whole session (`postgres:17-alpine`, on
+a random port) and give every test its own database. They are skipped, not failed, if Docker is unavailable, and
+`make test-fast` leaves them out. Only the containers the tests start are touched and removed; nothing else on your
+Docker host is affected.
+
+```bash
+uv run pytest tests/e2e -s       # the end-to-end suite, with throughput printed
+uv run pytest -m docker          # every test that needs Docker
+```
 
 ## How we work: test-driven
 
@@ -135,3 +156,70 @@ Each kind of store has its own scheme namespace, so `memory` exists as a chunk s
 | ChunkStore | `file:///<directory>` | `max_value_bytes`, `locality` (`pod` / `node` / `cluster`) |
 | MetadataStore | `memory://` | none |
 | MetadataStore | `sqlite:///<file>` or `sqlite://` (throwaway, in memory) | none |
+
+## Running a transfer
+
+There is no command-line tool yet; a transfer is a function call. Everything is chosen by URL:
+
+```python
+import asyncio
+
+from bitdrop_core.registry import (
+    open_chunk_store,
+    open_destination,
+    open_metadata_store,
+    open_source,
+)
+from bitdrop_core.transfer import TransferConfig, run_transfer
+
+
+async def main() -> None:
+    source = open_source("postgresql://user:pw@source-host/shop")
+    destination = open_destination("postgresql://user:pw@warehouse-host/shop")
+    staging = open_chunk_store("memory://")  # or file:///dev/shm/bitdrop on a tmpfs
+    metadata = open_metadata_store("sqlite:///var/lib/bitdrop/job-1.db")  # persistent: resumable
+
+    report = await run_transfer(
+        source,
+        destination,
+        staging,
+        metadata,
+        TransferConfig(job_id="job-1", source_table="public.orders", destination_table="orders"),
+    )
+    print(report.succeeded, report.rows_loaded, report.failures)
+
+
+asyncio.run(main())
+```
+
+Running the same `job_id` again against the same metadata store and destination resumes the job: chunks that are
+already loaded are skipped, and the destination's ledger makes a repeat harmless even if the metadata is lost.
+
+## The PostgreSQL connector
+
+`postgresql://user:password@host:port/database`. Option `bitdrop_pool_size` (default 4) bounds the connections; all
+other query options go to libpq. Passwords are redacted from every error message.
+
+**What it does**
+
+- *Source*: reads the catalog, splits the table by integer primary key into inclusive ranges sized from a sample of
+  the row width (sparse keys get wider ranges; the extremes of `bigint` do not overflow). Without an integer primary
+  key it reads one chunk, and says so in the plan notes. `split_column` overrides the choice (NOT NULL integer).
+- *Destination*: creates the schema and table (from native type hints when the source is PostgreSQL, otherwise from
+  Arrow types) **without indexes or constraints**, which is much faster for bulk loads; add them afterwards. Each
+  chunk is one transaction: ledger row plus `COPY`.
+- Table names are validated (`table` or `schema.table`, case-sensitive) and every identifier is quoted.
+
+**Supported column types** (each proven by `tests/e2e`): `smallint`, `integer`, `bigint`, `real`,
+`double precision`, `boolean`, `text`, `varchar(n)`, `char(n)`, `date`, `time`, `timestamp[(p)]`, `timestamptz`,
+`bytea`, `uuid`, `json`, `jsonb`, `inet`, `interval`, `numeric(p,s)` with `p <= 38`, and arrays of
+`text`/`varchar`/`integer`/`bigint`. Anything else (`money`, unconstrained `numeric`, ranges, enums, geometry, ...) is
+refused at planning with the column named. Workaround: transfer a view that casts the column.
+
+**Known limits**
+
+- No snapshot isolation: chunks are read at different moments. Every row is read at most once, but rows inserted,
+  deleted, or re-keyed during the transfer may or may not appear.
+- Arrays with `NULL` elements are refused (the driver would store them as `0` or `''`); see principle P2.
+- Chunk sizes come from `reltuples` (or a `count(*)` for tables never analysed) and a row-width sample; skewed data
+  gives uneven chunks.

@@ -105,9 +105,10 @@ PENDING ──claim──▶ EXTRACTING ──put──▶ EXTRACTED ──claim
 Metadata Redis alone cannot guarantee "no duplicate rows": a loader can commit to the destination and die *before* it
 marks the chunk `LOADED`. The reaper then re-queues it and the rows land twice. Options (can be combined):
 
-> **Status (2026-10-16):** the chunk state machine, leases, and fencing exist as the `MetadataStore` contract and two
-> adapters, and a pipeline test shows a dead *extractor* causes neither loss nor duplicates. The destination-side
-> protection below, which closes the "loader committed, then died" window, is **not built yet**.
+> **Status (2026-10-16): built and verified.** The chunk state machine, leases, and fencing are the `MetadataStore`
+> contract; option 1 below (a ledger in the destination, written in the same transaction as the data) is implemented in
+> the PostgreSQL destination. An end-to-end test against a real PostgreSQL makes a loader commit a chunk and then
+> die: the chunk is redone, the ledger recognises it, and the destination holds every row exactly once.
 
 1. **Ledger in the destination**: write `chunk_id` into a `_bitdrop_chunks` table *in the same transaction* as the
    data. Loader checks/inserts the ledger row atomically with the load.
@@ -324,3 +325,34 @@ decisive experiment to run first.
    span multiple nodes? This decides whether option A is enough or B/C is required.
 9. **Plugin mechanism** — in-process adapters (fast, one language) or out-of-process plugins over gRPC/Arrow Flight
    (language-agnostic, isolated, extra hop)? See open questions in [principles.md](principles.md).
+
+## 12. Results so far (2026-10-16)
+
+What exists and what has been measured. Numbers come from `uv run pytest tests/e2e -s` on a laptop, with
+PostgreSQL in a local container on both ends and an in-process staging tier, so they say nothing about
+network-bound, multi-node performance. They show the pipeline's own overhead is small.
+
+| Fact | Evidence |
+|---|---|
+| A 200,000-row, 13-column table moves PostgreSQL to PostgreSQL in 53 chunks in about 0.4 s (about 500k rows/s, about 110 MiB/s through the staging tier) | `tests/e2e/test_postgres_to_postgres.py::test_a_wide_table_arrives_exactly` |
+| The copy is exact: row count and an md5 over every row's text match, and so do the column types | same test, plus the type matrix below |
+| 26 column types (ints, floats incl. `NaN`/`Infinity`, text up to 100 KB, Unicode, dates, timestamps, `bytea`, `uuid`, `json`/`jsonb`, `inet`, `interval`, `numeric(p,s)`, arrays) arrive bit for bit | `test_every_supported_type_survives_the_trip` |
+| A loader that commits and then dies causes no duplicate rows | `test_a_loader_dying_after_its_commit_causes_no_duplicate_rows` |
+| A run killed mid-job resumes to the identical result (staging lost or kept) | `test_a_killed_run_resumes_to_the_same_result` |
+| Hung calls time out, slow reads keep their lease through heartbeats, a full staging store applies backpressure, a lost blob is re-extracted | `tests/integration/test_transfer_runner.py` |
+
+Findings that changed the design:
+
+- `adbc_ingest` into a table it creates degrades types (`numeric` becomes `text`, `jsonb` becomes `json`). The
+  destination therefore creates tables itself from the source's native types, carried as Arrow field metadata.
+- `numeric` arrives as an opaque string; `numeric(p,s)` with `p <= 38` is cast to `decimal128` and loads losslessly.
+  Unconstrained `numeric` has no lossless Arrow type and is refused at planning.
+- The installed ADBC COPY writer stores `NULL` array elements as `0` or `''` without an error. bitdrop refuses
+  such chunks (principle P2). Worth reporting upstream; a staged-text workaround is possible.
+
+Experiments from section 10: **H3** (crash safety) is validated at the connector level; **H4** (row-size estimates) is
+implemented by sampling but not yet checked on wide-column data; **H1, H2, H5, H6** (data-plane throughput, decoupling
+benefit, pod-local vs dedicated store, compression) are still open and need a networked setup to mean anything.
+
+Known gaps: no snapshot-consistent reads, no destination constraints/indexes, splitting only by an integer primary key
+(or a hint), no memory governor beyond simple backpressure, no CLI, no Redis adapters.

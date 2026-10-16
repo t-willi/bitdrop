@@ -229,6 +229,82 @@ class TestLedger:
         await destination.aclose()
 
 
+class TestArrays:
+    """The installed ADBC COPY writer turns NULL array *elements* into 0 or '' without an error.
+    A destination must store a value exactly or refuse it, so such chunks are refused."""
+
+    SCHEMA = pa.schema(
+        [
+            pa.field("id", pa.int64(), nullable=False),
+            hinted("tags", pa.list_(pa.string()), "text[]"),
+            hinted("nums", pa.list_(pa.int32()), "integer[]"),
+        ]
+    )
+
+    def table(self, tags: list[object], nums: list[object]) -> pa.Table:
+        ids = pa.array(range(1, len(tags) + 1), pa.int64())
+        return pa.table(
+            {
+                "id": ids,
+                "tags": pa.array(tags, pa.list_(pa.string())),
+                "nums": pa.array(nums, pa.list_(pa.int32())),
+            },
+            schema=self.SCHEMA,
+        )
+
+    async def test_arrays_that_are_empty_missing_or_full_load_exactly(
+        self, postgres_url: str, pg: PostgresClient
+    ) -> None:
+        destination = PostgresDestination(postgres_url)
+        await destination.prepare("t", self.SCHEMA)
+        data = self.table([["a", "", "c"], [], None, ["only"]], [[1, -2, 3], [], None, [0]])
+
+        await destination.write_chunk("j", "c1", "t", data)
+
+        assert pg.query(postgres_url, "SELECT tags::text, nums::text FROM t ORDER BY id") == [
+            ('{a,"",c}', "{1,-2,3}"),
+            ("{}", "{}"),
+            (None, None),
+            ("{only}", "{0}"),
+        ]
+        await destination.aclose()
+
+    @pytest.mark.parametrize(
+        ("tags", "nums"),
+        [
+            ([["a", None]], [[1]]),
+            ([["a"]], [[1, None]]),
+        ],
+        ids=["null-text-element", "null-int-element"],
+    )
+    async def test_null_array_elements_are_refused_not_corrupted(
+        self, postgres_url: str, pg: PostgresClient, tags: list[object], nums: list[object]
+    ) -> None:
+        destination = PostgresDestination(postgres_url)
+        await destination.prepare("t", self.SCHEMA)
+
+        with pytest.raises(ConnectorError, match="NULL elements"):
+            await destination.write_chunk("j", "c1", "t", self.table(tags, nums))
+
+        assert pg.scalar(postgres_url, "SELECT count(*) FROM t") == 0
+        assert pg.scalar(postgres_url, "SELECT count(*) FROM _bitdrop_chunks") == 0
+        await destination.aclose()
+
+    async def test_a_chunk_refused_for_null_elements_does_not_poison_the_destination(
+        self, postgres_url: str
+    ) -> None:
+        destination = PostgresDestination(postgres_url)
+        await destination.prepare("t", self.SCHEMA)
+        with pytest.raises(ConnectorError):
+            await destination.write_chunk("j", "bad", "t", self.table([["a", None]], [[1]]))
+
+        good = await destination.write_chunk("j", "good", "t", self.table([["a"]], [[1]]))
+
+        assert (good.rows, good.already_loaded) == (1, False)
+        assert await destination.count_rows("t") == 1
+        await destination.aclose()
+
+
 class TestSafety:
     @pytest.mark.parametrize("name", ["t; DROP TABLE victim", 't"', "a.b.c", "", "1t"])
     async def test_malicious_or_malformed_table_names_are_refused_before_any_sql(

@@ -85,6 +85,8 @@ convention = "google"
 # Tests describe themselves through their names; docstrings are optional there.
 "**/tests/**" = ["D", "ASYNC240"]
 "tests/**" = ["D", "ASYNC240"]
+# End-to-end tests carry SQL fixtures (wide INSERT rows) that are clearer unwrapped.
+"tests/e2e/**" = ["D", "ASYNC240", "E501"]
 "conftest.py" = ["D"]
 
 # ---------------------------------------------------------------------------------------------
