@@ -17,7 +17,9 @@ does the work for one message. This loop supplies the rest:
   without losing an attempt.
 
 The message is acknowledged only after the handler returned. Doing the work twice must be harmless,
-which the destination's ledger guarantees for chunks.
+which the destination's ledger guarantees for chunks. A handler may return a *cleanup*, run after
+the acknowledgement: deleting a staged chunk belongs there, because a chunk deleted before the
+acknowledgement could not be told from a chunk that was lost if the container died in between.
 """
 
 import asyncio
@@ -29,12 +31,15 @@ from dataclasses import dataclass
 from bitdrop_api.chunk_queue import ChunkQueue, Delivery
 from bitdrop_api.errors import DeliveryLost, QueueError
 
-__all__ = ["ConsumerConfig", "ConsumerStats", "Defer", "GiveUp", "consume"]
+__all__ = ["Cleanup", "ConsumerConfig", "ConsumerStats", "Defer", "GiveUp", "Handler", "consume"]
 
 log = logging.getLogger("bitdrop.queueflow")
 
-Handler = Callable[[bytes], Awaitable[None]]
-"""Does the work for one message body. Raising is a failed attempt."""
+Cleanup = Callable[[], Awaitable[None]]
+"""Work to do after the message is acknowledged, whose failure does not matter (it is logged)."""
+
+Handler = Callable[[bytes], Awaitable[Cleanup | None]]
+"""Does the work for one message body. Raising is a failed attempt. It may return a cleanup."""
 
 
 class GiveUp(Exception):
@@ -136,7 +141,7 @@ async def _process(
         failure = ""
         for attempt in range(attempts):
             try:
-                await handler(delivery.body)
+                cleanup = await handler(delivery.body)
             except GiveUp as signal:
                 await _dead(queue, delivery, str(signal) or "given up", stats)
                 return
@@ -154,6 +159,8 @@ async def _process(
             else:
                 await queue.ack(delivery)
                 stats.handled += 1
+                if cleanup is not None:
+                    await _clean_up(cleanup)
                 return
         await _dead(queue, delivery, f"failed {attempts} times, last: {failure}", stats)
     except asyncio.CancelledError:
@@ -163,6 +170,13 @@ async def _process(
         holder.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await holder
+
+
+async def _clean_up(cleanup: Cleanup) -> None:
+    try:
+        await cleanup()
+    except Exception:
+        log.warning("cleaning up after a message failed; the work is done", exc_info=True)
 
 
 async def _hold(queue: ChunkQueue, delivery: Delivery, interval: float) -> None:

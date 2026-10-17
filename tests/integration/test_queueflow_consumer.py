@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from bitdrop_core.queueflow import ConsumerConfig, ConsumerStats, Defer, GiveUp, consume
+from bitdrop_core.queueflow import ConsumerConfig, ConsumerStats, Defer, GiveUp, Handler, consume
 from bitdrop_queue_memory import MemoryChunkQueue
 
 TIMEOUT = 10.0
@@ -41,7 +41,7 @@ class Run:
     def __init__(
         self,
         queue: MemoryChunkQueue,
-        handler: Callable[[bytes], Awaitable[None]],
+        handler: Handler,
         cfg: ConsumerConfig,
         name: str = "c-1",
     ) -> None:
@@ -82,6 +82,43 @@ class TestHandling:
         stats = await run.finish()
 
         assert stats.handled == 0
+
+
+class TestCleaningUp:
+    async def test_the_cleanup_a_handler_returns_runs_after_the_acknowledgement(self) -> None:
+        queue = MemoryChunkQueue()
+        in_flight_when_cleaning: list[int] = []
+
+        async def handler(body: bytes) -> Callable[[], Awaitable[None]]:
+            async def clean_up() -> None:
+                in_flight_when_cleaning.append((await queue.stats()).in_flight)
+
+            return clean_up
+
+        await queue.publish(b"one")
+        run = Run(queue, handler, config())
+        await until(lambda: settled(queue))
+        await asyncio.sleep(0.05)
+        await run.finish()
+
+        assert in_flight_when_cleaning == [0], "the message was still unacknowledged during cleanup"
+
+    async def test_a_cleanup_that_fails_does_not_undo_the_work(self) -> None:
+        queue = MemoryChunkQueue()
+
+        async def handler(body: bytes) -> Callable[[], Awaitable[None]]:
+            async def clean_up() -> None:
+                raise ConnectionError("the store went away")
+
+            return clean_up
+
+        await queue.publish(b"one")
+        run = Run(queue, handler, config())
+        await until(lambda: settled(queue))
+        stats = await run.finish()
+
+        assert (stats.handled, stats.dead, stats.retried) == (1, 0, 0)
+        assert (await queue.stats()).dead == 0
 
 
 class TestFailures:

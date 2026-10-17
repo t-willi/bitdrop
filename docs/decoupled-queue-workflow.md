@@ -321,10 +321,18 @@ Smallest steps that answer a question each; all run with no database via the mem
    (settings, schema, a fingerprint of the chunk ids), then the destination table, then the messages, and the
    `planned` marker last. A finished plan is not published again unless `republish` says the queue was lost. The
    chunk-id fingerprint is what stops a table that grew between two runs from getting different ids.
-6. **The source loop and the destination loop** as plain functions over the contracts, driven by the
+6. **The source loop and the destination loop** (**done 2026-10-17**, `bitdrop_core.queueflow`) as plain functions over the contracts, driven by the
    fault-injection style tests already used for `run_transfer` (kill after write, kill after commit, duplicate
    offer, poison chunk, an unparseable id), with several source containers: the rows read are complete and
    disjoint after a kill.
+   Built as: one `consume` loop (receive, take over silent holders, touch while working, retry up to
+   `max_attempts` counting earlier deliveries, dead-letter, hand back a deferred or cancelled message uncounted,
+   acknowledge only after the handler returned) and two handlers. The source container turns the id into a chunk,
+   reads it with the schema the planner recorded, stages it, publishes the file message, then acknowledges; a full
+   chunk store defers instead of failing. The destination container writes the chunk and acknowledges, and only
+   then deletes the staged chunk (a handler returns that as a *cleanup*): deleted first, a crash before the
+   acknowledgement would make a loaded chunk look lost. A staged chunk that is really missing is set aside, not
+   acknowledged, so a lost chunk never disappears silently; `republish` of the plan brings it back.
 7. **Completion and a read-only `status`** from the planner's marker and the destination ledger.
 8. **Two role images and a docker-compose file**; then measure throughput against the current design on the same
    table. Question: does removing the master change speed, or only complexity?
