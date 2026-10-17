@@ -17,7 +17,7 @@ A display has three jobs:
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -40,6 +40,10 @@ class UiContext:
 
     keep_open: bool = True
     """Whether a display that owns the screen stays up after the job, until the person quits."""
+
+    begin: Callable[[], None] | None = None
+    """For a job that waits to be started: call it to let the job begin. A display that can start
+    jobs offers that to the person. ``None`` means the job is already running."""
 
     extractors: int = 0
     loaders: int = 0

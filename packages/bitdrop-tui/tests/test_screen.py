@@ -219,7 +219,12 @@ class TestTheScreen:
 Auto = Callable[[Pilot[object]], Coroutine[Any, Any, None]]
 
 
-def tui(*, keep_open: bool = True, auto: Auto | None = None) -> tuple[TuiUi, io.StringIO]:
+def tui(
+    *,
+    keep_open: bool = True,
+    auto: Auto | None = None,
+    begin: Callable[[], None] | None = None,
+) -> tuple[TuiUi, io.StringIO]:
     out = io.StringIO()
     context = UiContext(
         job_id="job-1",
@@ -227,6 +232,7 @@ def tui(*, keep_open: bool = True, auto: Auto | None = None) -> tuple[TuiUi, io.
         destination_table="dst",
         endpoints={},
         keep_open=keep_open,
+        begin=begin,
     )
     return TuiUi(context, out=out, headless=True, size=(110, 36), auto_pilot=auto), out
 
@@ -399,3 +405,63 @@ class TestPresenting:
         await canceller
 
         assert job.cancelled()
+
+
+class TestWaitingToStart:
+    """A job opened with ``--wait`` does nothing until the person presses ``s``."""
+
+    async def test_pressing_s_starts_the_job_once_and_the_hint_goes_away(self) -> None:
+        started: list[int] = []
+        seen: dict[str, str] = {}
+        job: asyncio.Task[TransferReport]
+
+        async def press_s(pilot: Pilot[object]) -> None:
+            await pilot.pause(0.2)
+            seen["before"] = shown(pilot.app, "#banner")  # type: ignore[arg-type]
+            await pilot.press("s")
+            await pilot.pause(0.2)
+            seen["after"] = shown(pilot.app, "#banner")  # type: ignore[arg-type]
+            await pilot.press("s")  # a second press starts nothing
+            await pilot.press("q")
+
+        ui, _ = tui(auto=press_s, begin=lambda: started.append(1))
+        job = asyncio.create_task(never_ends())
+
+        await present_promptly(ui, job)
+
+        assert started == [1]
+        assert "Press s to start" in seen["before"]
+        assert "Press s" not in seen["after"]
+
+    async def test_q_before_the_start_closes_the_screen_without_starting(self) -> None:
+        started: list[int] = []
+
+        async def press_q(pilot: Pilot[object]) -> None:
+            await pilot.pause(0.2)
+            await pilot.press("q")
+
+        ui, _ = tui(auto=press_q, begin=lambda: started.append(1))
+        job = asyncio.create_task(never_ends())
+
+        await present_promptly(ui, job)
+
+        assert started == []
+        assert job.cancelled()
+
+    async def test_without_a_waiting_job_s_does_nothing_and_there_is_no_hint(self) -> None:
+        started: list[int] = []
+        seen: dict[str, str] = {}
+
+        async def press_s_then_q(pilot: Pilot[object]) -> None:
+            await pilot.pause(0.2)
+            seen["banner"] = shown(pilot.app, "#banner")  # type: ignore[arg-type]
+            await pilot.press("s")
+            await pilot.press("q")
+
+        ui, _ = tui(auto=press_s_then_q)
+        job = asyncio.create_task(never_ends())
+
+        await present_promptly(ui, job)
+
+        assert started == []
+        assert "Press s" not in seen["banner"]
