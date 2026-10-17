@@ -1,6 +1,7 @@
 """The Textual screen, driven by Textual's own test pilot (no terminal needed)."""
 
 import asyncio
+import dataclasses
 import io
 import logging
 import time
@@ -12,7 +13,7 @@ from textual.pilot import Pilot
 from textual.widgets import RichLog, Static
 
 from bitdrop_api.metadata_store import ChunkRecord, ChunkState, Stage
-from bitdrop_core.progress import ChunkFailed, ChunkStarted, PlanReady, Snapshot
+from bitdrop_core.progress import ChunkFailed, ChunkFinished, ChunkStarted, PlanReady, Snapshot
 from bitdrop_core.transfer import TransferReport
 from bitdrop_core.ui import ProgressUi, UiContext
 from bitdrop_tui import create_ui
@@ -113,6 +114,39 @@ class TestTheScreen:
 
             assert "extractor-0" in shown(app, "#workers")
             assert "c004" in shown(app, "#workers")
+
+    async def test_it_shows_how_many_workers_are_extracting_and_loading(
+        self, running_job: asyncio.Task[TransferReport]
+    ) -> None:
+        context = dataclasses.replace(CONTEXT, extractors=3, loaders=5)
+        ui = TuiUi(context)
+        app = BitdropApp(ui, running_job)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert shown(app, "#activity").split("\n")[0].split() == [
+                "extracting",
+                "0",
+                "of",
+                "3",
+                "busy",
+            ]
+
+            ui(plan())  # the plan names its own numbers: 2 and 2
+            ui(ChunkStarted("c000", Stage.EXTRACT, "extractor-0"))
+            ui(ChunkStarted("c001", Stage.EXTRACT, "extractor-1"))
+            ui(ChunkStarted("c002", Stage.LOAD, "loader-0"))
+            app.refresh_view()
+            await pilot.pause()
+
+            lines = shown(app, "#activity").split("\n")
+            assert lines[0].split() == ["extracting", "2", "of", "2", "busy"]
+            assert lines[1].split() == ["loading", "1", "of", "2", "busy"]
+            assert lines[2].split()[:2] == ["containers", "1"]
+
+            ui(ChunkFinished("c000", Stage.EXTRACT, "extractor-0", rows=1, bytes=1, seconds=0.1))
+            app.refresh_view()
+            await pilot.pause()
+            assert shown(app, "#activity").split("\n")[0].split()[1] == "1"
 
     async def test_a_failed_attempt_appears_in_the_events(
         self, running_job: asyncio.Task[TransferReport]

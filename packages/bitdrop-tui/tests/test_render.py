@@ -8,6 +8,7 @@ from bitdrop_core.progress import ChunkFinished, ChunkStarted, PlanReady, Snapsh
 from bitdrop_core.tracker import JobTracker
 from bitdrop_tui.render import (
     STATE_STYLE,
+    activity_text,
     bar,
     bucket_state,
     chunk_map,
@@ -301,6 +302,31 @@ class TestWorkers:
 
     def test_no_workers_yet_is_a_quiet_message(self) -> None:
         assert "waiting" in workers_text(tracked()).plain
+
+
+class TestActivity:
+    def test_it_counts_the_busy_extractors_and_loaders_against_the_configured_numbers(self) -> None:
+        tracker = tracked()
+        tracker.apply(ChunkStarted("c000", Stage.EXTRACT, "extractor-0"))
+        tracker.apply(ChunkStarted("c001", Stage.EXTRACT, "extractor-1"))
+        tracker.apply(ChunkStarted("c002", Stage.LOAD, "loader-0"))
+
+        lines = activity_text(tracker, extractors=4, loaders=3).plain.split("\n")
+
+        assert lines[0].split() == ["extracting", "2", "of", "4", "busy"]
+        assert lines[1].split() == ["loading", "1", "of", "3", "busy"]
+
+    def test_before_the_job_starts_nothing_is_busy(self) -> None:
+        lines = activity_text(JobTracker(), extractors=2, loaders=2).plain.split("\n")
+
+        assert lines[0].split() == ["extracting", "0", "of", "2", "busy"]
+        assert lines[1].split() == ["loading", "0", "of", "2", "busy"]
+
+    def test_the_containers_line_says_that_every_worker_runs_in_this_process(self) -> None:
+        text = activity_text(tracked(), extractors=1, loaders=1).plain
+
+        assert text.split("\n")[2].split()[:2] == ["containers", "1"]
+        assert "this process" in text
 
 
 def test_text_is_rich_text() -> None:

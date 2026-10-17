@@ -16,6 +16,7 @@ from bitdrop_core.tracker import JobTracker
 
 __all__ = [
     "STATE_STYLE",
+    "activity_text",
     "bar",
     "bucket_state",
     "chunk_map",
@@ -174,6 +175,25 @@ def staging_text(tracker: JobTracker, *, width: int) -> Text:
     text.append(f"\n{format_bytes(tracker.bytes_staged)} staged so far")
     if tracker.duplicates_skipped:
         text.append(f"\n{tracker.duplicates_skipped} repeated chunks", style="yellow")
+    return text
+
+
+def activity_text(tracker: JobTracker, *, extractors: int, loaders: int) -> Text:
+    """How many workers are extracting and loading right now, and how many containers run them.
+
+    ``extractors`` and ``loaders`` are the configured numbers. Every worker runs inside the one
+    process that runs the job, so the container count is 1 until the role images exist.
+    """
+    text = Text()
+    for name, stage, configured, style in (
+        ("extracting", Stage.EXTRACT, extractors, "yellow"),
+        ("loading", Stage.LOAD, loaders, "bright_blue"),
+    ):
+        text.append(f"{name:<12}")
+        text.append(f"{tracker.busy(stage)}", style=style)
+        text.append(f" of {configured} busy\n")
+    text.append(f"{'containers':<12}1", style="bold")
+    text.append("  every worker runs in this process", style="dim")
     return text
 
 

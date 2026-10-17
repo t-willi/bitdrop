@@ -28,6 +28,7 @@ from bitdrop_core.tracker import JobTracker
 from bitdrop_core.transfer import TransferReport
 from bitdrop_core.ui import UiContext
 from bitdrop_tui.render import (
+    activity_text,
     chunk_map,
     legend,
     overall_text,
@@ -131,6 +132,7 @@ class BitdropApp(App[None]):
     #overall { height: 4; }
     #mid { height: 6; }
     #throughput { width: 3fr; }
+    #activity { width: 2fr; }
     #staging { width: 2fr; }
     #chunks { height: auto; min-height: 4; }
     #low { height: 1fr; min-height: 5; }
@@ -157,6 +159,7 @@ class BitdropApp(App[None]):
         yield Static(id="overall", classes="panel")
         with Horizontal(id="mid"):
             yield Static(id="throughput", classes="panel")
+            yield Static(id="activity", classes="panel")
             yield Static(id="staging", classes="panel")
         yield Static(id="chunks", classes="panel")
         with Horizontal(id="low"):
@@ -171,6 +174,7 @@ class BitdropApp(App[None]):
         for selector, title in (
             ("#overall", "Progress"),
             ("#throughput", "Rows per second"),
+            ("#activity", "Activity"),
             ("#staging", "Staging tier"),
             ("#chunks", "Chunks"),
             ("#workers-box", "Workers"),
@@ -195,6 +199,14 @@ class BitdropApp(App[None]):
         )
         self.query_one("#throughput", Static).update(
             throughput_text(tracker, width=self._width("#throughput"))
+        )
+        plan = tracker.plan
+        self.query_one("#activity", Static).update(
+            activity_text(
+                tracker,
+                extractors=plan.extractors if plan else context.extractors,
+                loaders=plan.loaders if plan else context.loaders,
+            )
         )
         self.query_one("#staging", Static).update(
             staging_text(tracker, width=self._width("#staging"))

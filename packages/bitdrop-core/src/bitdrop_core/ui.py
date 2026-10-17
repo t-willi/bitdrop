@@ -41,6 +41,11 @@ class UiContext:
     keep_open: bool = True
     """Whether a display that owns the screen stays up after the job, until the person quits."""
 
+    extractors: int = 0
+    loaders: int = 0
+    """How many extractors and loaders the job is configured for, to show before the plan is
+    announced (the plan then names them itself). 0 means the caller did not say."""
+
 
 @runtime_checkable
 class ProgressUi(Protocol):
