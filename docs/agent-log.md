@@ -37,9 +37,9 @@ Their standing instructions are in section 7.
 
 ## 2. Current state
 
-Everything below is committed and passes `make check`. At the last full run: **1,512 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
+Everything below is committed and passes `make check`. At the last full run: **1,545 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
 (the skips are intentional: kit checks that do not apply to a given adapter); **300 of the tests need Docker**. The
-2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,205 non-Docker tests ran
+2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,238 non-Docker tests ran
 (all green); run a full `make check` where Docker exists. In particular the PostgreSQL source kit has not run
 against the new chunk ids, and the e2e test `test_a_loader_dying_after_its_commit_causes_no_duplicate_rows` changed
 from a named chunk to the 4th write. Last feature commit: `dcb045b`.
@@ -47,7 +47,7 @@ from a named chunk to the 4th write. Last feature commit: `dcb045b`.
 | Piece | Package / path | State |
 |---|---|---|
 | Contracts and conformance kits | `bitdrop-api` | `ChunkStore`, `MetadataStore` (with `release` and the saved plan: `save_plan`, `load_plan`), `Source`, `Destination`, `ChunkCodec`, errors, key rule, URL parsing, Arrow native-type metadata, `plan.py` (a source plan to bytes and back); kits in `bitdrop_api.testing` |
-| Core | `bitdrop-core` | `registry.py` (opens components, queues included, by URL, displays by name, via entry points), `transfer.py` (`run_transfer`: saved plan, extractors, loaders, reaper, heartbeats, timeouts, backpressure, clean stop, progress observer), `progress.py` (events), `tracker.py` (events to display state), `ui.py` (`ProgressUi` contract), `summary.py`, `humanize.py`, `codec.py` (Arrow IPC, none/lz4/zstd) |
+| Core | `bitdrop-core` | `registry.py` (opens components, queues and marker stores included, by URL, displays by name, via entry points), `transfer.py` (`run_transfer`: saved plan, extractors, loaders, reaper, heartbeats, timeouts, backpressure, clean stop, progress observer), `progress.py` (events), `tracker.py` (events to display state), `ui.py` (`ProgressUi` contract), `summary.py`, `humanize.py`, `codec.py` (Arrow IPC, none/lz4/zstd) |
 | Chunk stores | `bitdrop-store-memory`, `bitdrop-store-file`, `bitdrop-store-redis` | `memory://`, `file:///dir` (use a tmpfs for RAM), `redis://` (Redis, Valkey, Dragonfly; same kit passes on all three) |
 | Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host; keeps the plan too) |
 | Queue (for the queue workflow, idea stage) | `bitdrop-queue-memory` | `ChunkQueue` contract in `bitdrop-api` (`chunk_queue.py`, kit `ChunkQueueConformance`): at-least-once; `memory://` adapter. Not used by the runner or the command yet; see `docs/decoupled-queue-workflow.md` |
@@ -146,7 +146,8 @@ section 12.
 | 2026-10-17 | `37230e5` | Docs for chunk ids (step 1 of the queue workflow) |
 | 2026-10-17 | `a693efc` | `ChunkQueue` contract, kit, and memory adapter (step 2 of the queue workflow) |
 | 2026-10-17 | `dcb045b` | `open_chunk_queue`: queues open by URL (`bitdrop.chunk_queues` entry points) |
-| 2026-10-17 | this commit | `MarkerStore` contract, kit, and memory adapter (step 3 of the queue workflow) |
+| 2026-10-17 | `1e9e5b5` | `MarkerStore` contract, kit, and memory adapter (step 3 of the queue workflow) |
+| 2026-10-17 | this commit | `open_marker_store`: marker stores open by URL (`bitdrop.marker_stores` entry points) |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of
