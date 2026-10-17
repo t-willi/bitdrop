@@ -7,7 +7,10 @@ display by name, so the same code runs any combination that is installed.
 import asyncio
 import contextlib
 import logging
+import os
+import re
 import signal
+import socket
 import sys
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AsyncExitStack
@@ -18,10 +21,26 @@ from typing import Protocol
 from bitdrop_api.errors import BitdropError
 from bitdrop_api.metadata_store import ChunkState
 from bitdrop_cli.jobfile import JobFile
+from bitdrop_core.queueflow import (
+    ConsumerStats,
+    DestinationWorkerConfig,
+    PlannerConfig,
+    PlannerReport,
+    QueueflowStatus,
+    SourceWorkerConfig,
+    queueflow_status,
+    run_destination_worker,
+    run_planner,
+    run_source_worker,
+    wait_until_finished,
+    work_is_drained,
+)
 from bitdrop_core.registry import (
     UnknownComponent,
+    open_chunk_queue,
     open_chunk_store,
     open_destination,
+    open_marker_store,
     open_metadata_store,
     open_source,
     open_ui,
@@ -32,9 +51,14 @@ from bitdrop_core.ui import UiContext
 __all__ = [
     "ExitCode",
     "PlanSummary",
+    "QueueWorkResult",
     "StatusSummary",
+    "default_worker_name",
     "job_status",
     "plan_job",
+    "queue_plan",
+    "queue_state",
+    "queue_work",
     "resolve_ui",
     "run_job",
 ]
@@ -226,6 +250,194 @@ async def job_status(job: JobFile) -> StatusSummary:
     if not any(counts.values()):
         raise BitdropError(f"no chunks are registered for job {job_id!r} in this metadata store")
     return StatusSummary(job_id=job_id, counts=counts)
+
+
+# -- the queue workflow ---------------------------------------------------------------------------
+
+
+async def queue_plan(job: JobFile, *, republish: bool = False) -> PlannerReport:
+    """Plan the job's table and publish its chunk ids to the work queue (the planner container).
+
+    Raises:
+        BitdropError: a component refused (unknown table, ...) or the job was chunked differently.
+    """
+    config = job.transfer_config()
+    async with AsyncExitStack() as parts:
+        source = _closing(parts, open_source(job.source.url))
+        destination = _closing(parts, open_destination(job.destination.url))
+        staging = _closing(parts, open_chunk_store(job.staging.url))
+        work = _closing(parts, open_chunk_queue(job.require_queues().work))
+        markers = _closing(parts, open_marker_store(job.require_markers().url))
+        return await run_planner(
+            source,
+            destination,
+            work,
+            markers,
+            PlannerConfig(
+                job_id=config.job_id,
+                source_table=config.source_table,
+                destination_table=config.destination_table,
+                target_chunk_bytes=effective_chunk_bytes(config, staging),
+                split_column=config.split_column,
+            ),
+            republish=republish,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class QueueWorkResult:
+    """How a container's run ended."""
+
+    stats: ConsumerStats
+    gave_up: QueueflowStatus | None
+    """Set when ``give_up_after`` ran out before the container's end condition was met."""
+
+
+def default_worker_name(role: str) -> str:
+    """A name for this container that no other container shares: role, host, and process id."""
+    host = re.sub(r"[^A-Za-z0-9.-]", "-", socket.gethostname()) or "host"
+    return f"{role}-{host}-{os.getpid()}"[:100]
+
+
+async def queue_work(
+    job: JobFile,
+    role: str,
+    *,
+    name: str | None = None,
+    stop_when_finished: bool = False,
+    give_up_after: float | None = None,
+) -> QueueWorkResult:
+    """Run one container of the queue workflow until it is stopped, and return what it did.
+
+    ``role`` is ``source`` or ``destination``. SIGINT and SIGTERM ask it to finish the message in
+    hand and leave; a second SIGINT cancels the message, which is handed back to the queue.
+    With ``stop_when_finished`` a source leaves once the plan is complete and no chunk is left to
+    extract, a destination once the whole job is over; ``give_up_after`` bounds the wait for that.
+
+    Raises:
+        BitdropError: a component refused, or the job file lacks a section the role needs.
+        ValueError: ``role`` is neither ``source`` nor ``destination``.
+    """
+    if role not in ("source", "destination"):
+        raise ValueError(f"role must be source or destination, got {role!r}")
+    name = name or default_worker_name(role)
+    consumer = job.consumer_config()
+    queues = job.require_queues()
+    job_id = job.job.id
+    stop = asyncio.Event()
+    async with AsyncExitStack() as parts:
+        staging = _closing(parts, open_chunk_store(job.staging.url))
+        markers = _closing(parts, open_marker_store(job.require_markers().url))
+        work = _closing(parts, open_chunk_queue(queues.work))
+        files = _closing(parts, open_chunk_queue(queues.files))
+        if role == "source":
+            source = _closing(parts, open_source(job.source.url))
+            worker = asyncio.create_task(
+                run_source_worker(
+                    source,
+                    staging,
+                    work,
+                    files,
+                    markers,
+                    SourceWorkerConfig(job_id, consumer),
+                    stop,
+                    name=name,
+                )
+            )
+        else:
+            destination = _closing(parts, open_destination(job.destination.url))
+            worker = asyncio.create_task(
+                run_destination_worker(
+                    destination,
+                    staging,
+                    files,
+                    DestinationWorkerConfig(job_id, job.destination.table, consumer),
+                    stop,
+                    name=name,
+                )
+            )
+
+        async def is_over() -> bool:
+            if role == "source":
+                return await work_is_drained(markers, work, job_id)
+            return (await queueflow_status(markers, work, files, job_id)).state.is_over
+
+        gave_up: list[QueueflowStatus] = []
+
+        async def watch() -> None:
+            deadline = (
+                None if give_up_after is None else asyncio.get_running_loop().time() + give_up_after
+            )
+            while not stop.is_set():
+                if await is_over():
+                    stop.set()
+                    return
+                if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+                    gave_up.append(await queueflow_status(markers, work, files, job_id))
+                    stop.set()
+                    return
+                await asyncio.sleep(consumer.poll_interval)
+
+        watcher = asyncio.create_task(watch()) if stop_when_finished else None
+        try:
+            with _stopping_gracefully(stop, worker):
+                stats = await worker
+        finally:
+            if watcher is not None:
+                watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher
+    return QueueWorkResult(stats, gave_up[0] if gave_up else None)
+
+
+async def queue_state(
+    job: JobFile, *, wait: bool = False, give_up_after: float | None = None
+) -> QueueflowStatus:
+    """Read the job's state from the markers and queues; with ``wait``, until it is over.
+
+    Raises:
+        BitdropError: the job file lacks a section, or a component refused.
+        TimeoutError: ``wait`` was set and the job was not over after ``give_up_after`` seconds.
+    """
+    async with AsyncExitStack() as parts:
+        queues = job.require_queues()
+        markers = _closing(parts, open_marker_store(job.require_markers().url))
+        work = _closing(parts, open_chunk_queue(queues.work))
+        files = _closing(parts, open_chunk_queue(queues.files))
+        if wait:
+            return await wait_until_finished(
+                markers, work, files, job.job.id, give_up_after=give_up_after
+            )
+        return await queueflow_status(markers, work, files, job.job.id)
+
+
+@contextlib.contextmanager
+def _stopping_gracefully(stop: asyncio.Event, task: asyncio.Task[object]) -> Iterator[None]:
+    """On SIGINT or SIGTERM ask for a stop after the message in hand; a second SIGINT cancels it."""
+    loop = asyncio.get_running_loop()
+    installed: list[signal.Signals] = []
+    signals_seen = 0
+
+    def ask(received: signal.Signals) -> None:
+        nonlocal signals_seen
+        signals_seen += 1
+        if signals_seen == 1:
+            stop.set()
+        else:
+            task.cancel()  # hands the message in hand back to the queue
+
+    for received in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(received, ask, received)
+        except NotImplementedError, RuntimeError, ValueError:
+            continue
+        installed.append(received)
+    try:
+        yield
+    finally:
+        for received in installed:
+            with contextlib.suppress(Exception):
+                loop.remove_signal_handler(received)
 
 
 # -- helpers --------------------------------------------------------------------------------------

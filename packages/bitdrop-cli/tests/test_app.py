@@ -104,6 +104,8 @@ class TestComponents:
         assert "memory" in by_kind["destinations"]
         assert "memory" in by_kind["staging"]
         assert "memory" in by_kind["metadata"]
+        assert "memory" in by_kind["queues"]
+        assert "memory" in by_kind["markers"]
         assert "plain" in by_kind["displays"]
         assert "json" in by_kind["displays"]
 

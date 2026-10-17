@@ -49,6 +49,7 @@ from pydantic import (
 from bitdrop_api.errors import BitdropError, InvalidKey
 from bitdrop_api.keys import validate_key
 from bitdrop_api.urls import redact_url
+from bitdrop_core.queueflow import ConsumerConfig
 from bitdrop_core.transfer import MAX_JOB_ID_LENGTH, MIB, TransferConfig
 
 __all__ = ["JobFile", "JobFileError", "load_job"]
@@ -136,6 +137,8 @@ class _TuningSection(_Section):
     max_attempts: int | None = Field(default=None, ge=1)
     chunk_timeout: float | None = Field(default=None, gt=0)
     backpressure_timeout: float | None = Field(default=None, gt=0)
+    poll_seconds: float | None = Field(default=None, gt=0)
+    """Queue workflow: how long a container waits for a new message before looking elsewhere."""
 
 
 class JobFile(_Section):
@@ -216,6 +219,22 @@ class JobFile(_Section):
             destination_table=self.destination.table,
             split_column=self.source.split_column,
             **{name: value for name, value in options.items() if value is not None},
+        )
+
+    def consumer_config(self) -> ConsumerConfig:
+        """The behaviour of a queue container: the tuning section's attempts, lease, and poll time.
+
+        ``lease_seconds`` is how long a message may sit untouched before another container takes
+        it over.
+        """
+        tuning = self.tuning
+        options: dict[str, Any] = {
+            "max_attempts": tuning.max_attempts,
+            "idle_seconds": tuning.lease_seconds,
+            "poll_interval": tuning.poll_seconds,
+        }
+        return ConsumerConfig(
+            **{name: value for name, value in options.items() if value is not None}
         )
 
     def endpoints(self) -> dict[str, str]:

@@ -25,7 +25,13 @@ from bitdrop_api.chunk_queue import ChunkQueue, QueueStats
 from bitdrop_api.marker_store import MarkerStore
 from bitdrop_core.queueflow.messages import chunking_key, planned_key
 
-__all__ = ["JobState", "QueueflowStatus", "queueflow_status", "wait_until_finished"]
+__all__ = [
+    "JobState",
+    "QueueflowStatus",
+    "queueflow_status",
+    "wait_until_finished",
+    "work_is_drained",
+]
 
 
 class JobState(StrEnum):
@@ -129,6 +135,17 @@ async def wait_until_finished(
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError(f"job {job_id!r} was still {status.state} after {give_up_after} s")
         await asyncio.sleep(poll_interval)
+
+
+async def work_is_drained(markers: MarkerStore, work: ChunkQueue, job_id: str) -> bool:
+    """``True`` once the plan is complete and no chunk is left to extract.
+
+    This is the moment a source container has nothing more to do, whether or not the destination
+    containers have loaded everything.
+    """
+    if await markers.get(planned_key(job_id)) is None:
+        return False
+    return not _busy(await work.stats())
 
 
 def _busy(stats: QueueStats) -> bool:

@@ -37,6 +37,7 @@ from bitdrop_core.queueflow.status import (
     QueueflowStatus,
     queueflow_status,
     wait_until_finished,
+    work_is_drained,
 )
 
 __all__ = [
@@ -70,4 +71,5 @@ __all__ = [
     "settings_key",
     "staging_key",
     "wait_until_finished",
+    "work_is_drained",
 ]

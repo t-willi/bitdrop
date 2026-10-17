@@ -30,6 +30,7 @@ from bitdrop_core.queueflow import (
     run_planner,
     run_source_worker,
     wait_until_finished,
+    work_is_drained,
 )
 from bitdrop_marker_memory import MemoryMarkerStore
 from bitdrop_queue_memory import MemoryChunkQueue
@@ -274,3 +275,34 @@ class TestWaiting:
             )
 
         assert 0.15 <= time.monotonic() - started < 5
+
+
+class TestTheWorkIsDrained:
+    async def test_not_before_the_plan_is_complete(self) -> None:
+        w = World()
+
+        assert not await work_is_drained(w.markers, w.work, JOB)
+
+    async def test_not_while_chunks_wait_or_are_held(self) -> None:
+        w = World()
+        await w.plan()
+        assert not await work_is_drained(w.markers, w.work, JOB)
+
+        held = await w.work.receive("source", max_messages=CHUNKS)
+        assert not await work_is_drained(w.markers, w.work, JOB)
+
+        for delivery in held:
+            await w.work.ack(delivery)
+        assert await work_is_drained(w.markers, w.work, JOB)
+
+    async def test_even_if_the_staged_chunks_are_not_loaded_yet(self) -> None:
+        w = World()
+        await w.plan()
+        w.start(sources=2, destinations=0)
+        deadline = time.monotonic() + 20
+        while not await work_is_drained(w.markers, w.work, JOB):
+            assert time.monotonic() < deadline
+            await asyncio.sleep(0.01)
+        await w.stop_all()
+
+        assert (await w.status()).state is JobState.RUNNING

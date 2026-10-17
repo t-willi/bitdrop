@@ -235,7 +235,11 @@ to them as `${NAME}`: they stay out of the file, and no message the command prin
 | `bitdrop run JOB.toml` | Run the job. `--ui auto\|tui\|plain\|json`, `--wait`, `--job-id`, `--extractors`, `--loaders`, `-v` |
 | `bitdrop plan JOB.toml` | Show how the source table would be cut into chunks. Moves no data, never opens the destination. `--json` |
 | `bitdrop status JOB.toml` | Chunk counts as the metadata store has them, whoever is running the job. `--json` |
-| `bitdrop components` | The connectors, stores, and displays that are installed |
+| `bitdrop components` | The connectors, stores, queues, marker stores, and displays that are installed |
+| `bitdrop queue plan JOB.toml` | The queue workflow's planner: chunk the table, publish one chunk id per chunk. `--republish` for a lost work queue |
+| `bitdrop queue source JOB.toml` | A source container: read the chunks named in the work queue and stage them. `--name`, `--stop-when-finished`, `--give-up-after` |
+| `bitdrop queue destination JOB.toml` | A destination container: load the staged chunks named in the file queue. Same options |
+| `bitdrop queue status JOB.toml` | The state of a queue job from the markers and the two queues. `--wait`, `--give-up-after`, `--json` |
 
 **Displays.** `auto` (the default) is the TUI on an interactive terminal when `bitdrop-tui` is installed, plain
 text otherwise. `plain` prints a progress line every two seconds to standard error and a summary to standard
@@ -247,6 +251,16 @@ worker runs inside the one process that runs the job).
 **Opening the TUI without starting the load.** `bitdrop run JOB.toml --wait` opens the TUI and moves nothing; press
 `s` to start the load, or `q` to leave (the command then prints `not started` and exits with 130). `--wait` works
 only with the TUI, because only it can start a job.
+
+**The queue workflow** (`docs/decoupled-queue-workflow.md`) needs `[queues]` (`work` and `files` URLs) and
+`[markers]` in the job file instead of `[metadata]`; `staging`, `source` and `destination` are as before. Run
+`bitdrop queue plan` once, then any number of `queue source` and `queue destination` containers, which can start in
+any order. A container runs until stopped: SIGTERM or Ctrl-C makes it finish the chunk in hand and leave (a second
+Ctrl-C hands the chunk back at once). `--stop-when-finished` makes it leave by itself: a source when every chunk is
+extracted, a destination when the whole job is over. Exit codes: 0 done, 1 some chunks were set aside or the wait ran
+out, 2 bad configuration, 3 refused by a component (a job id chunked differently, for instance). `[tuning]`:
+`lease_seconds` is how long a chunk may sit untouched before another container takes it over, `max_attempts` how
+often it may fail, `poll_seconds` how long a container waits for a new message.
 
 **Stopping and resuming.** Ctrl-C, SIGTERM, and `q` stop the job cleanly: every chunk a worker holds is handed
 back to the metadata store without counting a failure, and the command exits with 130. Running the same command
