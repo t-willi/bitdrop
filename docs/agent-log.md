@@ -20,7 +20,7 @@ large bursts, so a huge full load finishes fast and cheaply.
 2. `docs/principles.md`: the binding rules (P1 every component is exchangeable, P2 never silently alter data).
 3. `docs/development.md`: layout, commands, how to add an adapter, how to run a transfer.
 4. `docs/ideation.md`: the original idea and design options; section 12 holds the measured results.
-5. `docs/decoupled-queue-workflow.md`: an idea, steps 1 to 4 of 8 built (chunk ids; the `ChunkQueue` and `MarkerStore` contracts with memory and Redis adapters, the Redis ones untested on real servers): source and destination containers decoupled by a
+5. `docs/decoupled-queue-workflow.md`: an idea, steps 1 to 5 of 8 built (chunk ids; the `ChunkQueue` and `MarkerStore` contracts with memory and Redis adapters, the Redis ones untested on real servers): source and destination containers decoupled by a
    Redis queue, no master. Its section 12 has questions for the user.
 
 **First commands in a fresh checkout:**
@@ -40,12 +40,12 @@ Their standing instructions are in section 7.
 
 ## 2. Current state
 
-Everything below is committed and passes `make check`. At the last full run: **1,804 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
+Everything below is committed and passes `make check`. At the last full run: **1,846 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
 (the skips are intentional: kit checks that do not apply to a given adapter); **300 of the tests need Docker**. The
-2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,329 non-Docker tests ran
+2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,371 non-Docker tests ran
 (all green); run a full `make check` where Docker exists. In particular the PostgreSQL source kit has not run
 against the new chunk ids, and the e2e test `test_a_loader_dying_after_its_commit_causes_no_duplicate_rows` changed
-from a named chunk to the 4th write. Last feature commit: `519809b`.
+from a named chunk to the 4th write. Last feature commit: `88b1745`.
 
 | Piece | Package / path | State |
 |---|---|---|
@@ -54,6 +54,7 @@ from a named chunk to the 4th write. Last feature commit: `519809b`.
 | Chunk stores | `bitdrop-store-memory`, `bitdrop-store-file`, `bitdrop-store-redis` | `memory://`, `file:///dir` (use a tmpfs for RAM), `redis://` (Redis, Valkey, Dragonfly; same kit passes on all three) |
 | Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host; keeps the plan too) |
 | Queue (for the queue workflow, idea stage) | `bitdrop-queue-memory` | `ChunkQueue` contract in `bitdrop-api` (`chunk_queue.py`, kit `ChunkQueueConformance`): at-least-once; `memory://` adapter. Not used by the runner or the command yet; see `docs/decoupled-queue-workflow.md` |
+| Queue workflow core | `bitdrop-core` (`bitdrop_core/queueflow/`) | `run_planner` (plan, record settings/schema/chunk fingerprint once in a `MarkerStore`, prepare the destination, publish one work message per chunk, write the `planned` marker last) and the message/marker formats. Source and destination loops not built yet. Not reachable from the command |
 | Redis queue (queue workflow) | `bitdrop-queue-redis` | `ChunkQueue` on Redis Streams: `redis://host/0?bitdrop_queue=<name>`. Handed-back messages move to a reserved consumer `__released__`; dead letters go to a second stream. **Kit passes on `fakeredis` only; real Redis, Valkey, Dragonfly not run yet** (`docs/verify-on-your-machine.md`) |
 | Redis markers (queue workflow) | `bitdrop-marker-redis` | `MarkerStore` on `SET key value NX` then `GET`: `redis://host/0`, keys `<prefix>marker:<key>`. **Kit passes on `fakeredis` only; real servers not run yet** (`docs/verify-on-your-machine.md`) |
 | Markers (for the queue workflow, idea stage) | `bitdrop-marker-memory` | `MarkerStore` contract in `bitdrop-api` (`marker_store.py`, kit `MarkerStoreConformance`): small values set once, first writer wins; `memory://` adapter. Not used yet |
@@ -153,7 +154,8 @@ section 12.
 | 2026-10-17 | `dcb045b` | `open_chunk_queue`: queues open by URL (`bitdrop.chunk_queues` entry points) |
 | 2026-10-17 | `1e9e5b5` | `MarkerStore` contract, kit, and memory adapter (step 3 of the queue workflow) |
 | 2026-10-17 | `519809b` | `open_marker_store`: marker stores open by URL (`bitdrop.marker_stores` entry points) |
-| 2026-10-17 | this commit | `bitdrop-queue-redis` and `bitdrop-marker-redis`, kits run on `fakeredis` only (step 4 of the queue workflow) |
+| 2026-10-17 | `88b1745` | `bitdrop-queue-redis` and `bitdrop-marker-redis`, kits run on `fakeredis` only (step 4 of the queue workflow) |
+| 2026-10-17 | this commit | The planner and the queue messages (step 5 of the queue workflow); `ChunkingMismatch` |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of

@@ -314,9 +314,13 @@ Smallest steps that answer a question each; all run with no database via the mem
    `docs/verify-on-your-machine.md`). Streams cannot un-deliver a message, so a `release` moves
    it to a reserved consumer with a large idle time and a lowered counter, and the next `receive` claims it from
    there; a waiting `receive` therefore notices a handed-back message only on its next call.
-5. **The planner**: analyze, record the settings, create the destination table, publish work messages and the
+5. **The planner** (**done 2026-10-17**, `bitdrop_core.queueflow.run_planner`): analyze, record the settings, create the destination table, publish work messages and the
    marker. Tests: a second run with other settings is refused; the same settings republish the same ids; a crash
    halfway republishes safely.
+   Built as: plan first (a missing table records nothing), then three markers each written once and compared
+   (settings, schema, a fingerprint of the chunk ids), then the destination table, then the messages, and the
+   `planned` marker last. A finished plan is not published again unless `republish` says the queue was lost. The
+   chunk-id fingerprint is what stops a table that grew between two runs from getting different ids.
 6. **The source loop and the destination loop** as plain functions over the contracts, driven by the
    fault-injection style tests already used for `run_transfer` (kill after write, kill after commit, duplicate
    offer, poison chunk, an unparseable id), with several source containers: the rows read are complete and

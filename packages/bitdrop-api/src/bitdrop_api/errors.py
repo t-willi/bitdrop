@@ -151,6 +151,24 @@ class DeliveryLost(QueueError):
         self.delivery = delivery
 
 
+class ChunkingMismatch(BitdropError):
+    """A job id that was chunked one way was asked to chunk the table another way.
+
+    The chunk ids are the destination's duplicate guard, so one job must keep one set of chunks: a
+    different chunk size, split column, schema, or a table that grew since the first plan would
+    give the same rows different ids and load them twice.
+    """
+
+    def __init__(self, job_id: str, what: str) -> None:
+        """Create the error for ``job_id``; ``what`` says which part differs."""
+        super().__init__(
+            f"job {job_id!r} was already chunked with other {what}; "
+            "use a new job id to chunk the table again"
+        )
+        self.job_id = job_id
+        self.what = what
+
+
 class ConnectorError(BitdropError):
     """Base class of errors raised by a source or destination connector."""
 
