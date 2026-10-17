@@ -18,6 +18,7 @@ import pyarrow.compute as pc
 from bitdrop_api.errors import TableNotFound
 from bitdrop_api.schema import with_native_type
 from bitdrop_api.source import ChunkSpec, SourcePlan
+from bitdrop_connector_postgres._chunk_ids import chunk_id_for, payload_from_id
 from bitdrop_connector_postgres._connection import ConnectionPool, parse_connection_url
 from bitdrop_connector_postgres._names import TableName, parse_table_name, quote_ident
 from bitdrop_connector_postgres._ranges import split_range
@@ -79,6 +80,23 @@ class PostgresSource:
             lambda connection: _plan(connection, table, name, target_chunk_bytes, split_column)
         )
 
+    def chunk_from_id(self, table: str, chunk_id: str) -> ChunkSpec:
+        """Read the chunk out of its id (``all``, ``<column>.<first>.<last>``, or ``x.<text>``).
+
+        Nothing is checked against the database: a column or range that does not exist fails when
+        the chunk is read.
+
+        Raises:
+            InvalidChunkId: not exactly an id this source writes.
+        """
+        payload = payload_from_id(chunk_id)
+        description = (
+            f"{payload['column']} in [{payload['lo']}, {payload['hi']}]"
+            if payload
+            else "whole table"
+        )
+        return ChunkSpec(chunk_id, description, payload)
+
     async def read_chunk(self, plan: SourcePlan, chunk: ChunkSpec) -> pa.Table:
         """Read one key range (or the whole table) as a table conforming to ``plan.schema``."""
         name = parse_table_name(plan.table)
@@ -134,7 +152,7 @@ def _plan(
             notes.append(
                 f"{table} has no integer primary key or split_column: reading it as a single chunk"
             )
-            chunks = (ChunkSpec("c000000", "whole table", {}, estimated_rows),)
+            chunks = (ChunkSpec(chunk_id_for({}), "whole table", {}, estimated_rows),)
         else:
             cursor.execute(
                 f"SELECT min({quote_ident(key)}), max({quote_ident(key)}) FROM {qualified}"
@@ -149,12 +167,12 @@ def _plan(
                     notes.append(note)
                 chunks = tuple(
                     ChunkSpec(
-                        f"c{index:06d}",
+                        chunk_id_for({"column": key, "lo": lo, "hi": hi}),
                         f"{key} in [{lo}, {hi}]",
                         {"column": key, "lo": lo, "hi": hi},
                         _chunk_rows(estimated_rows, low, high, lo, hi),
                     )
-                    for index, (lo, hi) in enumerate(ranges)
+                    for lo, hi in ranges
                 )
 
     return SourcePlan(

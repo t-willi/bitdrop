@@ -123,6 +123,15 @@ class ConnectorError(BitdropError):
     """Base class of errors raised by a source or destination connector."""
 
 
+class InvalidChunkId(ConnectorError):
+    """A source cannot turn a chunk id into a chunk: not one of its ids, or not canonical."""
+
+    def __init__(self, chunk_id: str, reason: str) -> None:
+        """Create the error for ``chunk_id``; ``reason`` says what is wrong with it."""
+        super().__init__(f"invalid chunk id: {reason} (chunk_id={chunk_id!r})")
+        self.chunk_id = chunk_id
+
+
 class TableNotFound(ConnectorError):
     """The source table does not exist (or is not visible to the configured user)."""
 
