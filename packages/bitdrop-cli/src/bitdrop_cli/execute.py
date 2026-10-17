@@ -26,7 +26,7 @@ from bitdrop_core.registry import (
     open_source,
     open_ui,
 )
-from bitdrop_core.transfer import effective_chunk_bytes, run_transfer
+from bitdrop_core.transfer import TransferReport, effective_chunk_bytes, run_transfer
 from bitdrop_core.ui import UiContext
 
 __all__ = [
@@ -93,15 +93,23 @@ async def run_job(
     job_id: str | None = None,
     extractors: int | None = None,
     loaders: int | None = None,
+    wait: bool = False,
     verbosity: int = 0,
 ) -> ExitCode:
     """Run the job with the named display and return the exit code.
+
+    With ``wait`` the display opens first and the job does nothing until the display calls
+    ``UiContext.begin``. Only a display that offers that (the TUI) may be used with it, or the job
+    would wait forever.
 
     Raises:
         BitdropError: a component refused or failed (the display has already been shut down).
         ValueError: a URL in the job is malformed.
     """
     config = job.transfer_config(job_id=job_id, extractors=extractors, loaders=loaders)
+    go = asyncio.Event()
+    if not wait:
+        go.set()
     async with AsyncExitStack() as parts:
         source = _closing(parts, open_source(job.source.url))
         destination = _closing(parts, open_destination(job.destination.url))
@@ -114,13 +122,18 @@ async def run_job(
                 source_table=config.source_table,
                 destination_table=config.destination_table,
                 endpoints=job.endpoints(),
+                begin=None if go.is_set() else go.set,
+                extractors=config.extractors,
+                loaders=config.loaders,
             ),
         )
 
+        async def started() -> TransferReport:
+            await go.wait()
+            return await run_transfer(source, destination, staging, metadata, config, observer=ui)
+
         with _logging_to(ui.log_handler(), verbosity):
-            task = asyncio.create_task(
-                run_transfer(source, destination, staging, metadata, config, observer=ui)
-            )
+            task = asyncio.create_task(started())
             with _stopping_on_signals(task):
                 try:
                     await ui.present(task)
@@ -132,6 +145,9 @@ async def run_job(
         try:
             report = task.result()
         except asyncio.CancelledError:
+            if not go.is_set():
+                print("not started: nothing was moved.", file=sys.stderr)
+                return ExitCode.INTERRUPTED
             print(
                 "stopped: unfinished chunks were handed back. Run the same command again to "
                 "resume (a metadata store that survives the process is needed).",

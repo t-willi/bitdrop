@@ -16,6 +16,7 @@ from bitdrop_api.errors import BitdropError
 from bitdrop_api.metadata_store import ChunkState
 from bitdrop_cli.execute import (
     AUTO,
+    TUI,
     ExitCode,
     PlanSummary,
     StatusSummary,
@@ -99,6 +100,10 @@ def run(
     loaders: Annotated[
         int | None, typer.Option(min=1, help="Concurrent writes to the destination.")
     ] = None,
+    wait: Annotated[
+        bool,
+        typer.Option("--wait", help="Open the tui first and start the load from it by pressing s."),
+    ] = False,
     verbose: Annotated[
         int, typer.Option("--verbose", "-v", count=True, help="Log more (-v info, -vv debug).")
     ] = 0,
@@ -113,6 +118,8 @@ def run(
         name = resolve_ui(
             ui, interactive=sys.stdout.isatty() and sys.stdin.isatty(), available=available_uis()
         )
+        if wait and name != TUI:
+            raise ValueError("--wait needs the tui display, the only one that can start a job")
         code = asyncio.run(
             run_job(
                 job,
@@ -120,6 +127,7 @@ def run(
                 job_id=job_id,
                 extractors=extractors,
                 loaders=loaders,
+                wait=wait,
                 verbosity=verbose,
             )
         )
