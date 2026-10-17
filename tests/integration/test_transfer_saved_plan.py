@@ -115,7 +115,7 @@ class TestSavingThePlan:
         plan = decode_plan(saved)
         assert plan.table == "people"
         assert [chunk.chunk_id for chunk in plan.chunks] == [
-            f"c{index:06d}" for index in range(report.chunks_total)
+            f"rows.{index * 100}.100" for index in range(report.chunks_total)
         ]
         assert sum((await meta.counts(JOB)).values()) == len(plan.chunks)
 

@@ -146,7 +146,9 @@ class TestThePlan:
             "people_copy",
         )
         assert first.chunks_total == CHUNKS
-        assert first.chunk_ids == tuple(f"c{i:06d}" for i in range(CHUNKS))
+        assert first.chunk_ids == tuple(
+            f"rows.{i * ROWS_PER_CHUNK}.{ROWS_PER_CHUNK}" for i in range(CHUNKS)
+        )
         assert first.estimated_rows == ROWS
         assert [name for name, _ in first.columns] == make_rows(1, 1).schema.names
         assert (first.extractors, first.loaders) == (3, 3)
@@ -162,11 +164,11 @@ class TestChunkEvents:
         result, _ = await observed_run()
 
         for stage in Stage:
-            started = sorted(e.chunk_id for e in result.of_type(ChunkStarted) if e.stage is stage)
-            finished = sorted(e.chunk_id for e in result.of_type(ChunkFinished) if e.stage is stage)
-            expected = [f"c{i:06d}" for i in range(CHUNKS)]
-            assert started == expected, stage
-            assert finished == expected, stage
+            started = [e.chunk_id for e in result.of_type(ChunkStarted) if e.stage is stage]
+            finished = [e.chunk_id for e in result.of_type(ChunkFinished) if e.stage is stage]
+            expected = [f"rows.{i * ROWS_PER_CHUNK}.{ROWS_PER_CHUNK}" for i in range(CHUNKS)]
+            assert sorted(started) == sorted(expected), stage
+            assert sorted(finished) == sorted(expected), stage
 
     async def test_a_chunk_is_extracted_before_it_is_loaded(self) -> None:
         result, _ = await observed_run()
@@ -177,7 +179,7 @@ class TestChunkEvents:
             if isinstance(e, ChunkStarted | ChunkFinished)
         }
         for index in range(CHUNKS):
-            cid = f"c{index:06d}"
+            cid = f"rows.{index * ROWS_PER_CHUNK}.{ROWS_PER_CHUNK}"
             order = [
                 position[(cid, Stage.EXTRACT, ChunkStarted)],
                 position[(cid, Stage.EXTRACT, ChunkFinished)],
@@ -202,29 +204,29 @@ class TestChunkEvents:
         assert extracted == result.report.bytes_staged
 
     async def test_a_transient_failure_is_reported_as_one_that_will_be_retried(self) -> None:
-        result, destination = await observed_run(source=FlakySource("c000003", failures=1))
+        result, destination = await observed_run(source=FlakySource("rows.300.100", failures=1))
 
         failed = result.of_type(ChunkFailed)
         assert result.report.succeeded
         assert [(e.chunk_id, e.stage, e.final) for e in failed] == [
-            ("c000003", Stage.EXTRACT, False)
+            ("rows.300.100", Stage.EXTRACT, False)
         ]
         assert "source went away" in failed[0].reason
         assert failed[0].failures == 1
         assert destination.contents("people_copy").num_rows == ROWS
 
     async def test_a_chunk_the_destination_already_had_is_marked_as_a_repeat(self) -> None:
-        result, _ = await observed_run(destination=CommitThenDieDestination("c000007"))
+        result, _ = await observed_run(destination=CommitThenDieDestination("rows.700.100"))
 
         loads = [e for e in result.of_type(ChunkFinished) if e.stage is Stage.LOAD]
         repeats = [e.chunk_id for e in loads if e.already_loaded]
         assert result.report.succeeded
-        assert repeats == ["c000007"]
+        assert repeats == ["rows.700.100"]
         assert result.of_type(Snapshot)[-1].duplicates_skipped == 1
 
     async def test_a_chunk_that_gives_up_is_reported_as_final(self) -> None:
         result, _ = await observed_run(
-            source=FlakySource("c000003", failures=-1), cfg=config(max_attempts=2)
+            source=FlakySource("rows.300.100", failures=-1), cfg=config(max_attempts=2)
         )
 
         failed = result.of_type(ChunkFailed)

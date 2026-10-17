@@ -86,6 +86,9 @@ class TestProtocols:
             async def plan(self, *args: object, **kwargs: object) -> SourcePlan:
                 raise NotImplementedError
 
+            def chunk_from_id(self, *args: object, **kwargs: object) -> ChunkSpec:
+                raise NotImplementedError
+
             async def read_chunk(self, *args: object, **kwargs: object) -> pa.Table:
                 raise NotImplementedError
 

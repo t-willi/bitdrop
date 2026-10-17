@@ -11,13 +11,14 @@ database:
 """
 
 import asyncio
+import re
 from collections.abc import Mapping
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
 from bitdrop_api.destination import ChunkWrite
-from bitdrop_api.errors import SchemaMismatch, TableNotFound, TableNotPrepared
+from bitdrop_api.errors import InvalidChunkId, SchemaMismatch, TableNotFound, TableNotPrepared
 from bitdrop_api.keys import validate_key
 from bitdrop_api.source import ChunkSpec, SourcePlan
 from bitdrop_api.urls import ParsedUrl, parse_url
@@ -31,6 +32,8 @@ __all__ = [
     "demo_table",
 ]
 
+
+_CHUNK_ID = re.compile(r"rows\.(?P<offset>0|[1-9]\d*)\.(?P<length>[1-9]\d*)")
 
 DEMO_TABLE = "demo"
 """Name of the generated table served by ``memory://?demo_rows=N``."""
@@ -91,12 +94,12 @@ class MemorySource:
         rows_per_chunk = max(1, target_chunk_bytes // row_bytes)
         chunks = tuple(
             ChunkSpec(
-                chunk_id=f"c{index:06d}",
+                chunk_id=f"rows.{offset}.{length}",
                 description=f"rows {offset}..{offset + length - 1}",
                 payload={"offset": offset, "length": length},
                 estimated_rows=length,
             )
-            for index, offset in enumerate(range(0, data.num_rows, rows_per_chunk))
+            for offset in range(0, data.num_rows, rows_per_chunk)
             for length in [min(rows_per_chunk, data.num_rows - offset)]
         )
         return SourcePlan(
@@ -105,6 +108,25 @@ class MemorySource:
             chunks=chunks,
             estimated_rows=data.num_rows,
             estimated_row_bytes=row_bytes,
+        )
+
+    def chunk_from_id(self, table: str, chunk_id: str) -> ChunkSpec:
+        """Read the row range out of an id of the form ``rows.<offset>.<length>``.
+
+        Only the canonical spelling is accepted (no leading zeros, no sign), and the range must lie
+        inside the table.
+        """
+        found = _CHUNK_ID.fullmatch(chunk_id)
+        if found is None:
+            raise InvalidChunkId(chunk_id, "expected rows.<offset>.<length>")
+        offset, length = int(found["offset"]), int(found["length"])
+        if offset + length > self._table(table).num_rows:
+            raise InvalidChunkId(chunk_id, f"the rows are not all in {table!r}")
+        return ChunkSpec(
+            chunk_id=chunk_id,
+            description=f"rows {offset}..{offset + length - 1}",
+            payload={"offset": offset, "length": length},
+            estimated_rows=length,
         )
 
     async def read_chunk(self, plan: SourcePlan, chunk: ChunkSpec) -> pa.Table:

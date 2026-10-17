@@ -7,7 +7,7 @@ import pyarrow.compute as pc
 import pytest
 
 from bitdrop_api.destination import Destination
-from bitdrop_api.errors import TableNotFound, TableNotPrepared
+from bitdrop_api.errors import InvalidChunkId, TableNotFound, TableNotPrepared
 from bitdrop_api.source import Source
 from bitdrop_api.testing import SAMPLE_SCHEMA, make_rows
 from bitdrop_connector_memory import (
@@ -39,6 +39,51 @@ class TestMemorySource:
         plan = await source.plan("t", target_chunk_bytes=row_bytes * 100)
 
         assert plan.chunks[-1].estimated_rows == 50
+
+    async def test_chunk_ids_say_which_rows_they_hold(self) -> None:
+        table = make_rows(1, 250)
+        source = MemorySource({"t": table})
+        row_bytes = table.nbytes // table.num_rows
+
+        plan = await source.plan("t", target_chunk_bytes=row_bytes * 100)
+
+        assert [chunk.chunk_id for chunk in plan.chunks] == [
+            "rows.0.100",
+            "rows.100.100",
+            "rows.200.50",
+        ]
+
+    def test_a_chunk_can_be_rebuilt_from_its_id(self) -> None:
+        source = MemorySource({"t": make_rows(1, 250)})
+
+        chunk = source.chunk_from_id("t", "rows.100.100")
+
+        assert chunk.payload == {"offset": 100, "length": 100}
+
+    @pytest.mark.parametrize(
+        "chunk_id",
+        [
+            "rows.00.100",  # a second spelling of rows.0.100
+            "rows.0100.100",
+            "rows.0.0",  # no rows
+            "rows.+1.5",
+            "rows.-1.5",
+            "rows.1.5.",
+            "rows.200.51",  # runs past the last row
+            "rows.250.1",
+        ],
+    )
+    def test_an_id_with_another_spelling_or_outside_the_table_is_refused(
+        self, chunk_id: str
+    ) -> None:
+        source = MemorySource({"t": make_rows(1, 250)})
+
+        with pytest.raises(InvalidChunkId):
+            source.chunk_from_id("t", chunk_id)
+
+    def test_an_id_for_an_unknown_table_is_reported_by_table(self) -> None:
+        with pytest.raises(TableNotFound):
+            MemorySource().chunk_from_id("nope", "rows.0.1")
 
     async def test_tables_can_be_added_later(self) -> None:
         source = MemorySource()
