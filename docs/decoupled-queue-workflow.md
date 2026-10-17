@@ -79,9 +79,47 @@ Redis Streams with a consumer group fit exactly: `XADD` to publish, `XREADGROUP`
 `XAUTOCLAIM` to take over from a dead consumer, `XPENDING` for stats. A plain list (`LPUSH`/`BRPOP`) loses the
 message if the consumer dies after taking it.
 
-"Ask once a second" works, but it makes the destination wait up to a second per file for no reason. `XREADGROUP`
-with `BLOCK` returns the instant a message arrives and costs Redis no more than polling does. Recommendation:
-block up to one second, so the loop still wakes every second to heartbeat and check for a stop request.
+Destination containers keep polling the queue; the one-second interval is an estimate, so it is a setting
+(`poll_interval`), not a rule. A plain poll makes the destination wait up to one interval per file for no reason.
+`XREADGROUP` with `BLOCK` returns the instant a message arrives and costs Redis no more than polling does, so the
+loop blocks for up to `poll_interval` and then wakes anyway to heartbeat and check for a stop request. To the
+container it is still "keep asking the queue".
+
+### Optional: a dispatcher after the stream
+
+Instead of every destination container pulling from the stream, a **dispatcher** (a load balancer) could read the
+stream and hand each chunk to a destination container. Two shapes exist:
+
+| Shape | How | When it earns its place |
+|---|---|---|
+| Pull (section 4, as above) | each destination asks the stream for the next message | default: the stream's consumer group already balances by itself, because a busy container asks less often and a fast one more often |
+| Push through a dispatcher | one or more dispatcher containers read the stream and send each chunk to a chosen destination container | when the choice needs knowledge the stream does not have |
+
+Reasons to choose the destination on purpose: per-destination limits (for example at most 4 concurrent loads into
+one database host), spreading chunks of one table so they do not all hit the same table lock, routing to a
+destination container in the right zone, or draining a container before it is removed.
+
+What a dispatcher costs, and why pull stays the default:
+
+- A pushed chunk sits in a busy container's inbox while an idle one waits (head-of-line blocking). Pull cannot do
+  that. The dispatcher must therefore send only to containers that have said "I have a free slot", which is pull
+  with an extra step.
+- It must know which containers are alive and how loaded they are, so it needs heartbeats and a registry: state
+  that this workflow set out to avoid.
+- It is one more thing to run and to make highly available. Run two; the stream's consumer group lets them share
+  the work without a lock.
+
+**Recommendation:** build pull first. Put the dispatcher behind its own contract so it can be added later without
+changing the connectors:
+
+```
+Dispatcher: reads ChunkQueue messages, chooses a destination slot, hands the message over;
+            a destination announces free slots and withdraws them on shutdown
+```
+
+A destination container then has two ways to get work, `ChunkQueue.receive` (pull) or a slot offered by a
+dispatcher, and the rest of its loop (load, delete, acknowledge, ledger) is identical. The acknowledgement still
+goes to the stream, so the failure rules in section 5 hold for both.
 
 ### Message
 
@@ -174,7 +212,7 @@ loaded, republish the rest. This is the reason for keeping the message small and
 ## 10. Trade-offs, honestly
 
 - **Gains:** no master to run or to fail; scaling is just a replica count; a role image needs only its own
-  contract; the shape suits Kubernetes autoscaling on queue length.
+  contract; the shape suits Kubernetes autoscaling on queue length; no ordering to maintain.
 - **Losses:** per-chunk states, leases and fencing tokens are gone (the stream's pending list only approximates
   them); exact progress, ETA and per-worker views need extra counters; clean "stop now, hand everything back" is
   weaker (a stopped consumer simply stops acknowledging); the memory governor's byte credits become a coarse
@@ -197,12 +235,21 @@ Smallest steps that answer a question each; all run with no database via the mem
 6. Two role images and a docker-compose file; then measure throughput against the current design on the same
    table. Question: does removing the master change speed, or only complexity?
 
-## 12. Questions for the owner
+## 12. Decided and open
+
+**Decided by the owner (2026-10-17):**
+
+- Chunk order does not matter. Nothing in the design may rely on it: any chunk can be loaded at any time, by any
+  destination container, in any order, and a re-offered chunk can arrive late. (This is what makes the rebuild in
+  section 8 and the reclaim in section 5 simple.)
+- Destination containers keep polling the queue; the one-second interval is an estimate and a setting.
+- A load balancer (dispatcher) after the stream is possible; see section 4. Pull is the starting point.
+
+**Open:**
 
 - Should this **replace** the master-based runner or sit **beside** it as a second mode? (It reuses every
   connector and store, so both can live in one repository.)
 - Is a lost queue acceptable if the rebuild in section 8 exists, or must the queue itself be durable?
-- Is the one-second wake-up a requirement or a description? A blocking read is faster and costs the same.
-- Should one job's chunks be ordered in any way (for example primary-key order), or is any order fine? The design
-  above gives no ordering.
+- Is there a concrete reason for a dispatcher (a per-database concurrency limit, zone routing), or is pull enough
+  for now?
 - Which queue after Redis Streams, if any: Kafka, SQS, the destination database?
