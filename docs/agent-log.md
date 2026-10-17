@@ -20,6 +20,8 @@ large bursts, so a huge full load finishes fast and cheaply.
 2. `docs/principles.md`: the binding rules (P1 every component is exchangeable, P2 never silently alter data).
 3. `docs/development.md`: layout, commands, how to add an adapter, how to run a transfer.
 4. `docs/ideation.md`: the original idea and design options; section 12 holds the measured results.
+5. `docs/decoupled-queue-workflow.md`: an idea only, nothing built: source and destination containers decoupled by a
+   Redis queue, no master. Its section 12 has questions for the user.
 
 **First commands in a fresh checkout:**
 
