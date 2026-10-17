@@ -4,6 +4,7 @@ See ``docs/decoupled-queue-workflow.md``. Nothing here names a backend: every pa
 (``Source``, ``Destination``, ``ChunkStore``, ``ChunkQueue``, ``MarkerStore``).
 """
 
+from bitdrop_core.queueflow.consumer import ConsumerConfig, ConsumerStats, Defer, GiveUp, consume
 from bitdrop_core.queueflow.messages import (
     CorruptMessage,
     FileMessage,
@@ -20,12 +21,17 @@ from bitdrop_core.queueflow.messages import (
 from bitdrop_core.queueflow.planner import PlannerConfig, PlannerReport, run_planner
 
 __all__ = [
+    "ConsumerConfig",
+    "ConsumerStats",
     "CorruptMessage",
+    "Defer",
     "FileMessage",
+    "GiveUp",
     "PlannerConfig",
     "PlannerReport",
     "WorkMessage",
     "chunking_key",
+    "consume",
     "decode_file",
     "decode_work",
     "encode_file",
