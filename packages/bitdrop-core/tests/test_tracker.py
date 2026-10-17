@@ -191,6 +191,20 @@ class TestWorkers:
 
         assert list(tracker.workers) == ["extractor-0", "extractor-1", "loader-1"]
 
+    def test_busy_workers_are_counted_per_stage(self) -> None:
+        tracker = JobTracker()
+        tracker.apply(plan())
+        assert (tracker.busy(Stage.EXTRACT), tracker.busy(Stage.LOAD)) == (0, 0)
+
+        tracker.apply(started("c000", Stage.EXTRACT, "extractor-0"))
+        tracker.apply(started("c001", Stage.EXTRACT, "extractor-1"))
+        tracker.apply(started("c002", Stage.LOAD, "loader-0"))
+        assert (tracker.busy(Stage.EXTRACT), tracker.busy(Stage.LOAD)) == (2, 1)
+
+        tracker.apply(finished("c000", Stage.EXTRACT, "extractor-0"))
+        tracker.apply(failed("c002", Stage.LOAD, "loader-0", final=False))
+        assert (tracker.busy(Stage.EXTRACT), tracker.busy(Stage.LOAD)) == (1, 0)
+
 
 class TestFailures:
     def test_failures_are_kept_oldest_first_and_capped(self) -> None:

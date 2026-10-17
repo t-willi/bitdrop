@@ -107,6 +107,14 @@ class JobTracker:
         """Every worker seen so far in name order; ``None`` means idle."""
         return self._workers
 
+    def busy(self, stage: Stage) -> int:
+        """How many workers hold a chunk for ``stage`` right now."""
+        return sum(
+            1
+            for activity in self._workers.values()
+            if activity is not None and activity.stage is stage
+        )
+
     @property
     def failures(self) -> Sequence[ChunkFailed]:
         """The most recent failed attempts, oldest first."""
