@@ -4,7 +4,7 @@ The handoff document between work sessions: what exists, what was decided and wh
 A new session reads sections 1 and 2 first, checks 5 for what to do next, and updates this file before it ends
 (section 9). It is checked by `tests/architecture/test_agent_log.py`, so it cannot silently fall behind the code.
 
-Last updated: 2026-10-16
+Last updated: 2026-10-17
 
 ## 1. Start here
 
@@ -37,9 +37,10 @@ Their standing instructions are in section 7.
 
 ## 2. Current state
 
-Everything below is committed and passes `make check`. At the last full run: **1,390 tests collected, 1,367 passed, 23
-skipped** (the skips are intentional: kit checks that do not apply to a given adapter), **300 of them need Docker**.
-Last feature commit: `af1fbd7`.
+Everything below is committed and passes `make check`. At the last full run: **1,403 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
+(the skips are intentional: kit checks that do not apply to a given adapter); **300 of the tests need Docker**. The
+2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,092 non-Docker tests ran
+(all green); run a full `make check` where Docker exists. Last feature commit: `f6bfb3f`.
 
 | Piece | Package / path | State |
 |---|---|---|
@@ -49,7 +50,7 @@ Last feature commit: `af1fbd7`.
 | Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host; keeps the plan too) |
 | Connectors | `bitdrop-connector-memory`, `bitdrop-connector-postgres` | `memory://` source+destination (`demo_rows`, `delay_ms`: a generated table and slow chunks, so no database is needed); `postgresql://` source (primary-key range splitting) and destination (ledger, native types) |
 | Command line | `bitdrop-cli` | the `bitdrop` command: `run`, `plan`, `status`, `components`; strict TOML job file with `${ENV}` in URLs; `plain` and `json` displays; exit codes 0/1/2/3/70/130; Ctrl-C and SIGTERM hand chunks back |
-| Terminal UI | `bitdrop-tui` | a live Textual screen (progress and estimate, rows/s sparklines, staging fill, chunk map, workers, events); `q`, Ctrl-C, or SIGTERM stop the job cleanly; the default on a terminal |
+| Terminal UI | `bitdrop-tui` | a live Textual screen (progress and estimate, rows/s sparklines, busy extractors and loaders and the container count, staging fill, chunk map, workers, events); `bitdrop run --wait` opens it without starting and `s` starts the load; `q`, Ctrl-C, or SIGTERM stop the job cleanly; the default on a terminal |
 | Cross-package tests | `tests/integration`, `tests/e2e`, `tests/architecture` | swap tests, runner with injected faults and clean stops, the saved plan (resume, two masters at once), real PostgreSQL to PostgreSQL (also through the `bitdrop` command, with a Ctrl-C and a resume), architecture rules, this log's checks |
 | Examples | `examples/demo.toml` | a job that needs no database; checked by a test, so it cannot rot |
 | Benchmarks | `benchmarks/test_chunk_store_throughput.py` | `make bench`: chunk store throughput table |
@@ -94,6 +95,8 @@ section 12.
 | 2026-10-16 | Exit codes: 0 done, 1 chunks failed, 2 bad configuration, 3 refused by a component, 70 bug, 130 stopped | Schedulers and scripts can tell the outcomes apart |
 | 2026-10-16 | The TUI is a live monitor first; the setup wizard, live worker knobs, and attaching to another process's job wait for their prerequisites (see the backlog) | Each needs a contract or governor that does not exist yet |
 | 2026-10-16 | Demo data lives in the memory connector (`demo_rows`, `delay_ms`), not in a new package or in the CLI | The CLI may not name a connector; this keeps the demo and the CLI tests free of Docker |
+| 2026-10-17 | A job can wait to be started: `UiContext.begin` is the callback a display calls; the CLI holds `run_transfer` behind an event until then; only the TUI is allowed with `--wait` | A display that never calls `begin` would hang the job forever; keeping the contract unchanged avoids touching every display |
+| 2026-10-17 | The TUI's container count is the constant 1 | Workers are tasks in one process; there are no containers until the role images (backlog item 1) exist. The panel says so |
 | 2026-10-16 | The metadata store keeps a job's plan as opaque bytes (`save_plan`: first writer wins and answers with the stored plan; `load_plan`); `bitdrop_api.plan` is the one place that knows the format (JSON, Arrow schema as base64 IPC, format number) | Adapters stay ignorant of Arrow and sources (P1); two masters planning at once must end with one plan; a person can read a saved plan |
 | 2026-10-16 | `run_transfer` uses a saved plan as it is and does not call `Source.plan`; the plan is saved before the chunks are registered; a job id saved for another table raises `PlanMismatch` (exit 3) | A resumed job must finish the chunks it started with, even if the table changed; a crash between the two writes leaves a plan and no chunks, which is harmless; chunk ids from two different plans would corrupt a job |
 | 2026-10-16 | A chunk payload must survive a JSON round trip exactly: encoding refuses a tuple, date, set, or non-text key; the source kit enforces it for every connector (P2) | JSON would silently turn a tuple into a list |
@@ -128,7 +131,11 @@ section 12.
 | 2026-10-16 | `514ca63` | `MetadataStore.save_plan` / `load_plan` in the contract, the kit, and the memory and SQLite adapters |
 | 2026-10-16 | `af1fbd7` | `run_transfer` saves the plan and resumes from it; `PlanMismatch`; two masters at once |
 | 2026-10-16 | `d315945` | The command refuses a job id saved for another table; mutation checks recorded |
-| 2026-10-16 | this commit | Docs and agent log for the saved plan |
+| 2026-10-16 | `f9e934b` | Docs and agent log for the saved plan |
+| 2026-10-17 | `7e63bda`, `db35ec3` | `docs/decoupled-queue-workflow.md`: the queue-based alternative (idea only) |
+| 2026-10-17 | `71d5bca`, `05d7e8a` | `JobTracker.busy`; the TUI Activity panel (busy extractors and loaders, containers) |
+| 2026-10-17 | `f0d017f`, `f6bfb3f` | `UiContext.begin`; `s` starts a waiting job in the TUI; `bitdrop run --wait` |
+| 2026-10-17 | this commit | Docs and agent log for the TUI start and activity panel |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of
@@ -164,6 +171,8 @@ Nothing here is started unless marked. Roughly in the order I would do it.
 - `bitdrop status` shows counts only; listing the failed chunks needs a list-by-state operation on `MetadataStore`.
 - `bitdrop plan` (the dry run) always asks the source; it does not show a plan already saved for the job id. It
   could say "this job already has a saved plan of N chunks".
+- The Activity panel counts workers of this process only; when roles run as separate containers, the container count
+  and the busy counts need a feed from the metadata store (workers are not registered there today).
 - Windows: signal handling falls back silently (no handlers), untested. The TUI was tested headless and in a
   pseudo-terminal on macOS only.
 

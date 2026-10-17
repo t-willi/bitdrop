@@ -220,7 +220,7 @@ to them as `${NAME}`: they stay out of the file, and no message the command prin
 
 | Command | What it does |
 |---|---|
-| `bitdrop run JOB.toml` | Run the job. `--ui auto\|tui\|plain\|json`, `--job-id`, `--extractors`, `--loaders`, `-v` |
+| `bitdrop run JOB.toml` | Run the job. `--ui auto\|tui\|plain\|json`, `--wait`, `--job-id`, `--extractors`, `--loaders`, `-v` |
 | `bitdrop plan JOB.toml` | Show how the source table would be cut into chunks. Moves no data, never opens the destination. `--json` |
 | `bitdrop status JOB.toml` | Chunk counts as the metadata store has them, whoever is running the job. `--json` |
 | `bitdrop components` | The connectors, stores, and displays that are installed |
@@ -228,7 +228,13 @@ to them as `${NAME}`: they stay out of the file, and no message the command prin
 **Displays.** `auto` (the default) is the TUI on an interactive terminal when `bitdrop-tui` is installed, plain
 text otherwise. `plain` prints a progress line every two seconds to standard error and a summary to standard
 output. `json` prints one JSON object per line on standard output (`plan`, `progress`, `chunk_failed`, then
-`report`, `stopped`, or `error`) and no URLs. In the TUI, `q` (or Ctrl-C) stops the job and `l` hides the events.
+`report`, `stopped`, or `error`) and no URLs. In the TUI, `q` (or Ctrl-C) stops the job and `l` hides the events. An Activity panel shows how many extractors
+and loaders are busy out of the configured numbers, and how many containers run them (always 1 for now: every
+worker runs inside the one process that runs the job).
+
+**Opening the TUI without starting the load.** `bitdrop run JOB.toml --wait` opens the TUI and moves nothing; press
+`s` to start the load, or `q` to leave (the command then prints `not started` and exits with 130). `--wait` works
+only with the TUI, because only it can start a job.
 
 **Stopping and resuming.** Ctrl-C, SIGTERM, and `q` stop the job cleanly: every chunk a worker holds is handed
 back to the metadata store without counting a failure, and the command exits with 130. Running the same command
