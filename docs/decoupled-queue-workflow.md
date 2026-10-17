@@ -56,7 +56,7 @@ Most pieces exist already, which is the point of P1:
 | The queue | **new contract**, `ChunkQueue` (section 4) | not built |
 | Analyzing and cutting the table | the plan (`Source.plan`) | built; runs in the planner (section 7) |
 | Handing chunk ids to source containers | the work queue, the same `ChunkQueue` contract | not built (section 7) |
-| Reading one chunk by its id | `Source.read_chunk` with the chunk's spec from the saved plan | built; the spec must be found from the id (section 7) |
+| Reading one chunk by its id | `Source.read_chunk`, plus a new `Source` method that turns an id into a chunk spec | read built; id parsing not built (section 7) |
 
 The queue must be its own contract, not a method on `ChunkStore`, so that it can be backed by Redis Streams today
 and by something else (Kafka, SQS, PostgreSQL) later without touching the connectors.
@@ -187,7 +187,8 @@ each chunk id to one container at a time.
 1. Calls `Source.plan` for the table. The source connector is the one place that knows how to split (PostgreSQL
    by integer primary key, others differently), and its kit already enforces that chunks are disjoint and
    complete. The planner never reads rows.
-2. Saves the plan where every container can read it (below).
+2. Records the settings the chunking used (table, split column, chunk size), creates the destination table from
+   the plan's columns and types, and refuses if this job id was already chunked with different settings.
 3. Publishes one **work message** per chunk to the work queue, then one **plan-complete marker**
    `{job, chunks: N}`, and exits.
 
@@ -195,28 +196,47 @@ It can run anywhere that reaches the source and Redis: a job on its own, or the 
 `bitdrop plan` is the same analysis without the publishing). Running it twice is harmless: chunk ids are
 deterministic, so a second run publishes the same ids, and a re-read overwrites the same blob key.
 
-### The work message and finding the chunk from its id
+### The chunk id says what to read
+
+Decided by the owner (2026-10-17): the chunk id carries the chunk's definition, for example `id.0-10000` (column,
+first and last key), so a source container needs only the queue message to read it:
 
 ```
-{ "job": "<job id>", "table": "<name>", "chunk": "<chunk id>", "attempt": 1, "format": 1 }
+{ "job": "<job id>", "table": "<name>", "chunk": "id.0-10000", "attempt": 1, "format": 1 }
 ```
 
-A chunk id alone does not say which rows to read, because `Source.read_chunk` needs the chunk's spec (for example
-a key range). Two ways to close that gap:
+The PostgreSQL connector already reads a chunk as `column BETWEEN lo AND hi`; the id is that same payload written
+as text. Rules that keep it sound:
 
-| Way | How | For | Against |
-|---|---|---|---|
-| A. Id in the message, spec in a saved plan | the planner saves the plan (`bitdrop_api.plan` already writes a plan to bytes and back, and the source kit checks that a saved plan reads the same table); the source container loads it once per job and looks the chunk up | small messages; one plan, one truth; same as the current runner, which uses a saved plan as it is | needs a place both can reach: the metadata store has `save_plan` / `load_plan` today; with only Redis, the plan bytes can sit under a key in the chunk store |
-| B. Spec in the message | the message carries the chunk's spec (it already survives a JSON round trip exactly, by rule) | a source container needs nothing but the queue and the source | bigger messages; the schema and the table check travel separately; the source cannot see that the table changed |
+- **The format belongs to the source connector.** The core treats the id as an opaque string (P1). Each connector
+  writes and parses its own form; a connector with no natural readable form may encode its payload instead. A new
+  `Source` method turns an id back into a chunk spec, and the source kit checks that parsing an id gives the spec
+  the planner made.
+- **The id names the split column**, not just numbers, so `t_1_0_10000` alone is not enough. The table comes from
+  the message. The id obeys the key rule (at most 200 characters from `A-Z a-z 0-9 . _ : -`); a range that cannot
+  fit, such as a long text or composite key, uses the connector's encoded fallback.
+- **The first and last chunk are open-ended**, so rows outside the estimated range are not lost. A table with no
+  integer primary key is one whole-table chunk with its own id.
+- **Order does not matter** (decided above): the destination never needs chunks in any order. For the destination
+  the id is only an idempotency key: the ledger row `(job, table, chunk)` makes a repeated chunk a no-op, which is
+  what prevents duplicate rows.
+- **The id is therefore only a safe key while the chunking is fixed for the job.** Two plans with different chunk
+  sizes would give different ids over the same rows, and the ledger would load those rows twice. So a job id is
+  bound to one chunking: the planner records its settings (table, split column, chunk size) with the plan-complete
+  marker, and a second planner run for the same job with different settings refuses instead of publishing. With
+  identical settings it publishes the same ids and is harmless.
+- **Column names and types do not go in the id.** The planner has them, so it also creates the destination table
+  before it publishes the first work message; destination containers then need no plan either.
 
-**Recommendation: A**, with the plan in the same place as in the current design, so the two workflows share it.
-If the metadata store should not be required, the plan goes into the chunk store as a blob (`plan/<job>`); the
-cost is losing "first writer wins" for two planners at once, which only matters if two are ever started.
+What this gives up: the saved plan's check that a job id was not reused for another table, and the plan as the
+one place to see all chunks. An alternative that keeps both is to put the id in the message and the full plan in
+a saved plan (the metadata store today, or a blob in the chunk store); it costs a second shared place and larger
+bookkeeping, and is kept only as a fallback if a connector cannot describe a chunk in its id.
 
 ### The source container's loop
 
 1. Take a work message (blocking read with `poll_interval`, as for the destination).
-2. Load the job's plan if not cached; find the chunk spec by id. An id not in the plan is a bug: dead-letter it.
+2. Parse the id into a chunk spec with the source connector. An id it cannot parse is a bug: dead-letter it.
 3. `Source.read_chunk`, encode, `put` the blob (overwrite allowed).
 4. Publish the file message (section 4), then acknowledge the work message. Same order as section 5, rule 1: the
    blob first, then the file message, then the acknowledgement. A crash anywhere repeats the chunk safely.
@@ -275,9 +295,10 @@ Smallest steps that answer a question each; all run with no database via the mem
    behave the same on all three (Dragonfly and Valkey differ in places)?
 3. Source loop and destination loop as plain functions over the contracts, driven by the fault-injection style
    tests already used for `run_transfer` (kill after write, kill after commit, duplicate offer, poison chunk).
-4. The planner (analyze, save the plan, publish work messages and the marker) and a source loop that reads a chunk
-   by id from the saved plan; several source containers; a test that the union of rows is complete and disjoint
-   after a kill, and that an id outside the plan is dead-lettered.
+4. The planner (analyze, record the settings, create the destination table, publish work messages and the marker)
+   and a source loop that parses a chunk id and reads it; several source containers; a test that the union of rows is
+   complete and disjoint after a kill, that an unparseable id is dead-lettered, and that a second planner run with
+   other settings is refused.
 5. Completion from the planner's marker and a read-only `status`.
 6. Two role images and a docker-compose file; then measure throughput against the current design on the same
    table. Question: does removing the master change speed, or only complexity?
@@ -293,13 +314,15 @@ Smallest steps that answer a question each; all run with no database via the mem
 - A load balancer (dispatcher) after the stream is possible; see section 4. Pull is the starting point.
 - The table is analyzed and chunked before extraction starts; chunk identifiers go into a work queue; a source
   connector takes an id and reads that chunk (section 7).
+- The chunk id carries the chunk's definition; the destination needs no order, and uses the id only to refuse
+  duplicates through its ledger (section 7).
 
 **Open:**
 
 - Should this **replace** the master-based runner or sit **beside** it as a second mode? (It reuses every
   connector and store, so both can live in one repository.)
-- Where does the saved plan live in this workflow: the metadata store as today (shared with the other
-  workflow), or as a blob next to the chunks so that Redis is the only shared service?
+- Where do the planner's recorded settings live (the check that stops a second, different chunking of one job)?
+  A key in Redis next to the plan-complete marker is the simplest.
 - Is a lost queue acceptable if the rebuild in section 8 exists, or must the queue itself be durable?
 - Is there a concrete reason for a dispatcher (a per-database concurrency limit, zone routing), or is pull enough
   for now?
