@@ -32,6 +32,12 @@ from bitdrop_core.queueflow.messages import (
 )
 from bitdrop_core.queueflow.planner import PlannerConfig, PlannerReport, run_planner
 from bitdrop_core.queueflow.source_worker import SourceWorkerConfig, run_source_worker, staging_key
+from bitdrop_core.queueflow.status import (
+    JobState,
+    QueueflowStatus,
+    queueflow_status,
+    wait_until_finished,
+)
 
 __all__ = [
     "Cleanup",
@@ -43,8 +49,10 @@ __all__ = [
     "FileMessage",
     "GiveUp",
     "Handler",
+    "JobState",
     "PlannerConfig",
     "PlannerReport",
+    "QueueflowStatus",
     "SourceWorkerConfig",
     "WorkMessage",
     "chunking_key",
@@ -54,10 +62,12 @@ __all__ = [
     "encode_file",
     "encode_work",
     "planned_key",
+    "queueflow_status",
     "run_destination_worker",
     "run_planner",
     "run_source_worker",
     "schema_key",
     "settings_key",
     "staging_key",
+    "wait_until_finished",
 ]

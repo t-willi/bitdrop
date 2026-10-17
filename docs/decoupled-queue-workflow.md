@@ -333,7 +333,13 @@ Smallest steps that answer a question each; all run with no database via the mem
    then deletes the staged chunk (a handler returns that as a *cleanup*): deleted first, a crash before the
    acknowledgement would make a loaded chunk look lost. A staged chunk that is really missing is set aside, not
    acknowledged, so a lost chunk never disappears silently; `republish` of the plan brings it back.
-7. **Completion and a read-only `status`** from the planner's marker and the destination ledger.
+7. **Completion and a read-only `status`** (**done 2026-10-17**, `queueflow_status`, `wait_until_finished`) from the planner's marker and the destination ledger.
+   Built as: five states (not planned, planning, running, finished, finished with failures) read from the
+   planner's markers and the two queues. The work queue is counted before the file queue, because a source
+   publishes the file message before it acknowledges the work message; counted the other way round, a chunk in
+   transit could be missed and a job reported finished too early. Extracted and loaded counts are derived from the
+   queues and approximate after a republish. The `Destination` has no "how many chunks are loaded" query, so the
+   ledger count in the plan above is not used; an empty file queue plus no dead letters stands in for it.
 8. **Two role images and a docker-compose file**; then measure throughput against the current design on the same
    table. Question: does removing the master change speed, or only complexity?
 
