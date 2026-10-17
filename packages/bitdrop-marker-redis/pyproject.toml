@@ -1,0 +1,16 @@
+[project]
+name = "bitdrop-marker-redis"
+version = "0.1.0"
+description = "MarkerStore adapter for any server speaking the Redis protocol: Redis, Valkey, Dragonfly."
+requires-python = ">=3.14"
+dependencies = ["bitdrop-api", "redis>=5.0.1", "hiredis>=3.0"]
+
+[project.entry-points."bitdrop.marker_stores"]
+redis = "bitdrop_marker_redis:create_store"
+
+[tool.uv.sources]
+bitdrop-api = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"

@@ -124,6 +124,17 @@ class QueueError(BitdropError):
     """Base class of errors raised by a :class:`~bitdrop_api.chunk_queue.ChunkQueue`."""
 
 
+class QueueUnavailable(QueueError):
+    """A networked queue could not be reached, or refused a request.
+
+    The request may be retried.
+    """
+
+    def __init__(self, detail: str) -> None:
+        """Create the error; ``detail`` says what went wrong (never include secrets)."""
+        super().__init__(f"queue unavailable: {detail}")
+
+
 class DeliveryLost(QueueError):
     """The delivery is no longer the current one: handed back, taken over, or settled.
 

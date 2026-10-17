@@ -309,6 +309,11 @@ Smallest steps that answer a question each; all run with no database via the mem
    winner's settings in the same step and can compare them with its own.
 4. **Redis adapters** for the queue (Streams) and the markers (`SET NX`), passing the same kits on Redis, Valkey and
    Dragonfly. Question: do the stream commands behave the same on all three?
+   *Written 2026-10-17 in a session without Docker:* the queue passes its kit on `fakeredis` (which does not block
+   `XREADGROUP`, so two waiting tests are skipped there); the run on the three real servers is still to do (see
+   `docs/verify-on-your-machine.md`). Streams cannot un-deliver a message, so a `release` moves
+   it to a reserved consumer with a large idle time and a lowered counter, and the next `receive` claims it from
+   there; a waiting `receive` therefore notices a handed-back message only on its next call.
 5. **The planner**: analyze, record the settings, create the destination table, publish work messages and the
    marker. Tests: a second run with other settings is refused; the same settings republish the same ids; a crash
    halfway republishes safely.

@@ -206,6 +206,18 @@ class ChunkQueueConformance:
         assert again.message_id == first.message_id
         assert again.deliveries == 1, "a hand-back must not count as a failed attempt"
 
+    async def test_a_message_that_was_handed_back_is_waiting_not_reclaimable(
+        self, queue: ChunkQueue
+    ) -> None:
+        """Reclaim takes over messages that went quiet; a handed-back one is not in flight."""
+        await queue.publish(b"one")
+        await queue.release(await _take(queue, "consumer-1"))
+
+        assert await queue.reclaim("consumer-2", idle_seconds=0.0) == []
+        stats = await queue.stats()
+        assert (stats.waiting, stats.in_flight) == (1, 0)
+        assert [d.body for d in await queue.receive("consumer-2")] == [b"one"]
+
     async def test_a_delivery_cannot_be_released_twice(self, queue: ChunkQueue) -> None:
         """A delivery cannot be released twice."""
         await queue.publish(b"one")

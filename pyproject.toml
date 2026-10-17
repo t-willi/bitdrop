@@ -20,11 +20,14 @@ dependencies = [
     "bitdrop-tui",
     "bitdrop-queue-memory",
     "bitdrop-marker-memory",
+    "bitdrop-queue-redis",
+    "bitdrop-marker-redis",
 ]
 
 [dependency-groups]
 dev = [
     "bitdrop-api[testing]",
+    "fakeredis>=2.26",
     "import-linter>=2.0",
     "mypy>=1.10",
     "pyarrow-stubs>=20.0.0.20260819",
@@ -54,6 +57,8 @@ bitdrop-cli = { workspace = true }
 bitdrop-tui = { workspace = true }
 bitdrop-queue-memory = { workspace = true }
 bitdrop-marker-memory = { workspace = true }
+bitdrop-queue-redis = { workspace = true }
+bitdrop-marker-redis = { workspace = true }
 
 # ---------------------------------------------------------------------------------------------
 # pytest
@@ -91,6 +96,8 @@ known-first-party = [
     "bitdrop_tui",
     "bitdrop_queue_memory",
     "bitdrop_marker_memory",
+    "bitdrop_queue_redis",
+    "bitdrop_marker_redis",
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -126,6 +133,8 @@ mypy_path = [
     "packages/bitdrop-tui/src",
     "packages/bitdrop-queue-memory/src",
     "packages/bitdrop-marker-memory/src",
+    "packages/bitdrop-queue-redis/src",
+    "packages/bitdrop-marker-redis/src",
 ]
 
 [[tool.mypy.overrides]]
@@ -151,6 +160,8 @@ root_packages = [
     "bitdrop_tui",
     "bitdrop_queue_memory",
     "bitdrop_marker_memory",
+    "bitdrop_queue_redis",
+    "bitdrop_marker_redis",
 ]
 
 [[tool.importlinter.contracts]]
@@ -160,7 +171,7 @@ type = "layers"
 # Everything may import from a layer below it, never from one above or beside it.
 layers = [
     "bitdrop_cli | bitdrop_tui",
-    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file | bitdrop_metadata_memory | bitdrop_metadata_sqlite | bitdrop_connector_memory | bitdrop_connector_postgres | bitdrop_store_redis | bitdrop_queue_memory | bitdrop_marker_memory",
+    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file | bitdrop_metadata_memory | bitdrop_metadata_sqlite | bitdrop_connector_memory | bitdrop_connector_postgres | bitdrop_store_redis | bitdrop_queue_memory | bitdrop_marker_memory | bitdrop_queue_redis | bitdrop_marker_redis",
     "bitdrop_api",
 ]
 
@@ -179,4 +190,6 @@ forbidden_modules = [
     "bitdrop_connector_postgres",
     "bitdrop_queue_memory",
     "bitdrop_marker_memory",
+    "bitdrop_queue_redis",
+    "bitdrop_marker_redis",
 ]

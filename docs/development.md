@@ -64,7 +64,9 @@ bitdrop/
 │   ├── bitdrop-store-redis/      ChunkStore adapter for the Redis protocol: Redis, Valkey, Dragonfly
 │   ├── bitdrop-metadata-memory/  MetadataStore adapter: dicts in this process
 │   ├── bitdrop-metadata-sqlite/  MetadataStore adapter: a SQLite file (persistent, multi-process)
+│   ├── bitdrop-queue-redis/      ChunkQueue adapter on Redis Streams (Redis, Valkey, Dragonfly); needs Docker to test on real servers
 │   ├── bitdrop-queue-memory/     ChunkQueue adapter: dicts in this process (the queue workflow, not wired in yet)
+│   ├── bitdrop-marker-redis/     MarkerStore adapter: `SET NX` on a Redis-protocol server; needs Docker to test on real servers
 │   ├── bitdrop-marker-memory/    MarkerStore adapter: a dict in this process (the queue workflow, not wired in yet)
 │   ├── bitdrop-connector-memory/ Source + Destination over in-memory Arrow tables
 │   ├── bitdrop-connector-postgres/ Source + Destination for PostgreSQL (ADBC); needs Docker to test
