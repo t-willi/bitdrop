@@ -262,6 +262,14 @@ out, 2 bad configuration, 3 refused by a component (a job id chunked differently
 `lease_seconds` is how long a chunk may sit untouched before another container takes it over, `max_attempts` how
 often it may fail, `poll_seconds` how long a container waits for a new message.
 
+**Docker.** `docker/Dockerfile` builds one image for every role of the queue workflow (the role is the command:
+`bitdrop queue plan`, `queue source`, `queue destination`), with the Redis and PostgreSQL adapters and no display
+toolkit. `examples/queue/docker-compose.yml` runs a whole job with two PostgreSQL databases and two Redis servers
+(staging without persistence, coordination with an append-only file):
+`docker compose -f examples/queue/docker-compose.yml up --build`, and `--scale source=6 --scale destination=4` to change
+the number of containers. `tests/architecture/test_queue_example.py` checks the files against each other without
+Docker. To add an adapter to the image, add its package to the list in the Dockerfile.
+
 **Stopping and resuming.** Ctrl-C, SIGTERM, and `q` stop the job cleanly: every chunk a worker holds is handed
 back to the metadata store without counting a failure, and the command exits with 130. Running the same command
 again continues where it stopped (a second Ctrl-C quits at once). Resuming needs a metadata store that survives

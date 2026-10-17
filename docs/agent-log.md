@@ -20,8 +20,10 @@ large bursts, so a huge full load finishes fast and cheaply.
 2. `docs/principles.md`: the binding rules (P1 every component is exchangeable, P2 never silently alter data).
 3. `docs/development.md`: layout, commands, how to add an adapter, how to run a transfer.
 4. `docs/ideation.md`: the original idea and design options; section 12 holds the measured results.
-5. `docs/decoupled-queue-workflow.md`: an idea, steps 1 to 7 of 8 built (chunk ids; the `ChunkQueue` and `MarkerStore` contracts with memory and Redis adapters, the Redis ones untested on real servers): source and destination containers decoupled by a
-   Redis queue, no master. Its section 12 has questions for the user.
+5. `docs/decoupled-queue-workflow.md`: an alternative to the master: a planner, source containers, and destination
+   containers joined by two Redis queues. All eight build steps exist (`bitdrop queue ...`, `docker/Dockerfile`,
+   `examples/queue/`); the Redis adapters and the Docker example are untested on real servers. Its section 12 has
+   the open questions for the user.
 
 **First commands in a fresh checkout:**
 
@@ -40,12 +42,12 @@ Their standing instructions are in section 7.
 
 ## 2. Current state
 
-Everything below is committed and passes `make check`. At the last full run: **1,924 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
+Everything below is committed and passes `make check`. At the last full run: **1,932 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
 (the skips are intentional: kit checks that do not apply to a given adapter); **300 of the tests need Docker**. The
-2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,449 non-Docker tests ran
+2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,457 non-Docker tests ran
 (all green); run a full `make check` where Docker exists. In particular the PostgreSQL source kit has not run
 against the new chunk ids, and the e2e test `test_a_loader_dying_after_its_commit_causes_no_duplicate_rows` changed
-from a named chunk to the 4th write. Last feature commit: `e7f0e2d`.
+from a named chunk to the 4th write. Last feature commit: `923d05c`.
 
 | Piece | Package / path | State |
 |---|---|---|
@@ -160,7 +162,8 @@ section 12.
 | 2026-10-17 | `e21c543` | The source and destination containers of the queue workflow, with a cleanup hook in `consume` (step 6) |
 | 2026-10-17 | `83296b7` | `queueflow_status` and `wait_until_finished`: is the job over (step 7 of the queue workflow) |
 | 2026-10-17 | `e7f0e2d` | Job file: `[queues]` and `[markers]` sections; `[metadata]` is optional (step 8, part 1) |
-| 2026-10-17 | this commit | `bitdrop queue plan / source / destination / status` (step 8, part 2) |
+| 2026-10-17 | `923d05c` | `bitdrop queue plan / source / destination / status` (step 8, part 2) |
+| 2026-10-17 | this commit | `docker/Dockerfile`, the `examples/queue/` compose example, an in-memory benchmark (step 8, part 3; the Docker files are unrun) |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of

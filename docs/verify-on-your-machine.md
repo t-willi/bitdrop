@@ -15,6 +15,17 @@ If `make check` is red, the narrower commands below say where to look.
 
 ## Open items
 
+- [ ] **The queue workflow end to end in Docker** (written 2026-10-17). `docker compose -f examples/queue/docker-compose.yml up --build`.
+  Expect the planner to print `planned N chunks`, three source and two destination containers to leave by themselves,
+  and `orders` in the destination database to hold 2,000,000 rows (`docker compose -f examples/queue/docker-compose.yml
+  exec destination-db psql -U postgres shop -c 'select count(*) from public.orders'`). Then try
+  `--scale source=6 --scale destination=4`, and kill a source container mid-job (`docker kill`) to see another take over its
+  chunk after the 60 s lease. The image has never been built; the Dockerfile's Python layer was only checked in a clean
+  virtual environment.
+- [ ] **Throughput of the queue design against the master over a real network.** The in-memory benchmark
+  (`benchmarks/test_queueflow_vs_runner.py`) shows equal coordination cost; the network round trip per message is untested.
+  Time `bitdrop run` and the compose example on the same table.
+
 - [ ] **Redis Streams queue on the real servers** (written 2026-10-17). `uv run pytest packages/bitdrop-queue-redis -m docker -v`.
   It runs the shared `ChunkQueue` kit on Redis, Valkey and Dragonfly. The same kit passes on a fake server here,
   except two tests that need a blocking `XREADGROUP`, which the fake does not do (they run only here). Watch for:

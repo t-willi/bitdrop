@@ -340,11 +340,34 @@ Smallest steps that answer a question each; all run with no database via the mem
    transit could be missed and a job reported finished too early. Extracted and loaded counts are derived from the
    queues and approximate after a republish. The `Destination` has no "how many chunks are loaded" query, so the
    ledger count in the plan above is not used; an empty file queue plus no dead letters stands in for it.
-8. **Two role images and a docker-compose file**; then measure throughput against the current design on the same
-   table. Question: does removing the master change speed, or only complexity?
+8. **One role image and a docker-compose file** (**written 2026-10-17, not run**: no Docker in that session; see
+   `docs/verify-on-your-machine.md`). `docker/Dockerfile` builds one image for every role, because the role is only
+   the command (`bitdrop queue plan | source | destination`); it holds the command line tool and the Redis and
+   PostgreSQL adapters and no display toolkit. `examples/queue/` has the job file, a source database seeded with two
+   million rows, and a compose file with a planner, three source containers, two destination containers, a staging
+   Redis (no persistence, `noeviction`) and a coordination Redis (append-only file). The Python layer of the image was
+   checked by installing the same packages into a clean virtual environment. Then measure throughput against the
+   current design on the same table. Question: does removing the master change speed, or only complexity?
 
 Each step is test first and committed on its own. Steps 1 to 3 and 5 to 7 run with no database or Docker through
 the memory adapters; step 4 and the PostgreSQL part of step 1 need Docker.
+
+### Result so far: in memory, the coordination costs the same
+
+`uv run pytest benchmarks/test_queueflow_vs_runner.py -s` moves 400,000 rows in 200 chunks of 2,000 with the
+master-based runner and with the queue workflow, on the in-memory adapters only (best of three runs, 2026-10-17):
+
+| Design | Workers each | Seconds | Rows per second |
+|---|---|---|---|
+| master | 1 | 0.14 | 2.8 million |
+| queues | 1 | 0.10 | 3.8 million |
+| master | 4 | 0.13 | 3.0 million |
+| queues | 4 | 0.12 | 3.3 million |
+
+Read with care: one process, no network, a table that sits in RAM. It says the queue design adds no coordination
+cost of its own (a fraction of a millisecond per chunk, the same as the metadata store), not that it is faster.
+With 10,000-row chunks both finish in 0.03 s and the numbers merge. The real question, the cost of a network
+round trip per message to Redis, is open and needs the compose example on a machine with Docker.
 
 ## 12. Decided and open
 
