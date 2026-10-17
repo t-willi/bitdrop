@@ -215,8 +215,10 @@ as text. Rules that keep it sound:
 - **The id names the split column**, not just numbers, so `t_1_0_10000` alone is not enough. The table comes from
   the message. The id obeys the key rule (at most 200 characters from `A-Z a-z 0-9 . _ : -`); a range that cannot
   fit, such as a long text or composite key, uses the connector's encoded fallback.
-- **The first and last chunk are open-ended**, so rows outside the estimated range are not lost. A table with no
-  integer primary key is one whole-table chunk with its own id.
+- **Ranges are closed and fixed at planning time**, as the PostgreSQL connector plans them today (from the key
+  minimum and maximum it found): a row inserted later outside that range is not read, the same limit as the
+  master-based workflow (no snapshot isolation). Making the first and last chunk open-ended would read such rows
+  and is a separate decision. A table with no integer primary key is one whole-table chunk, `all`.
 - **Order does not matter** (decided above): the destination never needs chunks in any order. For the destination
   the id is only an idempotency key: the ledger row `(job, table, chunk)` makes a repeated chunk a no-op, which is
   what prevents duplicate rows.
@@ -225,8 +227,11 @@ as text. Rules that keep it sound:
   bound to one chunking: the planner records its settings (table, split column, chunk size) with the plan-complete
   marker, and a second planner run for the same job with different settings refuses instead of publishing. With
   identical settings it publishes the same ids and is harmless.
-- **Column names and types do not go in the id.** The planner has them, so it also creates the destination table
-  before it publishes the first work message; destination containers then need no plan either.
+- **Column names and types do not go in the id**, but a source container still needs them to read
+  (`read_chunk` takes a plan for its schema). Found while building step 1. The planner has them, so it writes the
+  schema into Redis with the recorded settings, creates the destination table before it publishes the first work
+  message, and a source container builds a plan with no chunks from the stored schema. Destination containers
+  then need no plan either. Left for step 5.
 
 What this gives up: the saved plan's check that a job id was not reused for another table, and the plan as the
 one place to see all chunks. An alternative that keeps both is to put the id in the message and the full plan in
@@ -290,7 +295,7 @@ loaded, republish the rest. This is the reason for keeping the message small and
 
 Smallest steps that answer a question each; all run with no database via the memory connector.
 
-1. **Chunk ids carry the chunk** (`Source` change): a method that turns a chunk id back into a chunk spec, the
+1. **Chunk ids carry the chunk** (`Source` change; **done 2026-10-17**, `eb9480a` and `1b8cfa1`): a method that turns a chunk id back into a chunk spec, the
    readable id form for the PostgreSQL and memory connectors, and a kit check that parsing an id gives the spec the
    planner made. Question: does every connector have a natural id form?
 2. **`ChunkQueue` contract**, a memory adapter, and the conformance kit. Question: is the contract tight enough?

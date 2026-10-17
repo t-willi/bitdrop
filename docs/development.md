@@ -126,6 +126,14 @@ two writers at once. A `Source` puts only values in its `ChunkSpec.payload` that
 booleans, null, lists, dicts with text keys; not tuples, dates, or sets): the plan is saved as JSON, and the source
 kit fails a payload that would change.
 
+A `Source`'s chunk ids say what to read. `chunk_from_id(table, chunk_id)` turns an id back into the chunk without
+planning or I/O, so a worker handed only an id can read it (the queue workflow in
+[decoupled-queue-workflow.md](decoupled-queue-workflow.md)). The format is the source's own; the core treats an id as
+an opaque key. Each chunk has exactly one spelling, and `chunk_from_id` refuses every other (`InvalidChunkId`),
+because the destination ledger is keyed by the id and a second spelling would load the same rows twice. The id must
+still obey the key rule, so a source falls back to an encoded form when its natural description does not fit. The
+source kit checks the round trip.
+
 1. **Create the package** with the same layout as an existing adapter: `packages/bitdrop-store-<name>/` for a
    ChunkStore, `packages/bitdrop-metadata-<name>/` for a MetadataStore. Depend only on `bitdrop-api` plus your client
    library.
@@ -325,6 +333,8 @@ other query options go to libpq. Passwords are redacted from every error message
 - *Source*: reads the catalog, splits the table by integer primary key into inclusive ranges sized from a sample of
   the row width (sparse keys get wider ranges; the extremes of `bigint` do not overflow). Without an integer primary
   key it reads one chunk, and says so in the plan notes. `split_column` overrides the choice (NOT NULL integer).
+  Chunk ids are `<column>.<first>.<last>` (`id.1.10000`), `all` for the whole table, or `x.<text>` (the payload as
+  URL-safe base64 JSON) for a column name the key rule forbids. The memory connector uses `rows.<offset>.<length>`.
 - *Destination*: creates the schema and table (from native type hints when the source is PostgreSQL, otherwise from
   Arrow types) **without indexes or constraints**, which is much faster for bulk loads; add them afterwards. Each
   chunk is one transaction: ledger row plus `COPY`.

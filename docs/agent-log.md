@@ -20,7 +20,7 @@ large bursts, so a huge full load finishes fast and cheaply.
 2. `docs/principles.md`: the binding rules (P1 every component is exchangeable, P2 never silently alter data).
 3. `docs/development.md`: layout, commands, how to add an adapter, how to run a transfer.
 4. `docs/ideation.md`: the original idea and design options; section 12 holds the measured results.
-5. `docs/decoupled-queue-workflow.md`: an idea only, nothing built: source and destination containers decoupled by a
+5. `docs/decoupled-queue-workflow.md`: an idea, step 1 of 8 built (chunk ids): source and destination containers decoupled by a
    Redis queue, no master. Its section 12 has questions for the user.
 
 **First commands in a fresh checkout:**
@@ -37,10 +37,12 @@ Their standing instructions are in section 7.
 
 ## 2. Current state
 
-Everything below is committed and passes `make check`. At the last full run: **1,403 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
+Everything below is committed and passes `make check`. At the last full run: **1,462 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
 (the skips are intentional: kit checks that do not apply to a given adapter); **300 of the tests need Docker**. The
-2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,092 non-Docker tests ran
-(all green); run a full `make check` where Docker exists. Last feature commit: `f6bfb3f`.
+2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,155 non-Docker tests ran
+(all green); run a full `make check` where Docker exists. In particular the PostgreSQL source kit has not run
+against the new chunk ids, and the e2e test `test_a_loader_dying_after_its_commit_causes_no_duplicate_rows` changed
+from a named chunk to the 4th write. Last feature commit: `eb9480a`.
 
 | Piece | Package / path | State |
 |---|---|---|
@@ -96,6 +98,7 @@ section 12.
 | 2026-10-16 | The TUI is a live monitor first; the setup wizard, live worker knobs, and attaching to another process's job wait for their prerequisites (see the backlog) | Each needs a contract or governor that does not exist yet |
 | 2026-10-16 | Demo data lives in the memory connector (`demo_rows`, `delay_ms`), not in a new package or in the CLI | The CLI may not name a connector; this keeps the demo and the CLI tests free of Docker |
 | 2026-10-17 | A job can wait to be started: `UiContext.begin` is the callback a display calls; the CLI holds `run_transfer` behind an event until then; only the TUI is allowed with `--wait` | A display that never calls `begin` would hang the job forever; keeping the contract unchanged avoids touching every display |
+| 2026-10-17 | A chunk id carries the chunk's definition; `Source.chunk_from_id` parses it; each chunk has exactly one spelling and any other is refused | The queue workflow reads a chunk from its id alone; the destination ledger is keyed by the id, so a second spelling of one chunk would load the same rows twice |
 | 2026-10-17 | The TUI's container count is the constant 1 | Workers are tasks in one process; there are no containers until the role images (backlog item 1) exist. The panel says so |
 | 2026-10-16 | The metadata store keeps a job's plan as opaque bytes (`save_plan`: first writer wins and answers with the stored plan; `load_plan`); `bitdrop_api.plan` is the one place that knows the format (JSON, Arrow schema as base64 IPC, format number) | Adapters stay ignorant of Arrow and sources (P1); two masters planning at once must end with one plan; a person can read a saved plan |
 | 2026-10-16 | `run_transfer` uses a saved plan as it is and does not call `Source.plan`; the plan is saved before the chunks are registered; a job id saved for another table raises `PlanMismatch` (exit 3) | A resumed job must finish the chunks it started with, even if the table changed; a crash between the two writes leaves a plan and no chunks, which is harmless; chunk ids from two different plans would corrupt a job |
@@ -135,7 +138,10 @@ section 12.
 | 2026-10-17 | `7e63bda`, `db35ec3` | `docs/decoupled-queue-workflow.md`: the queue-based alternative (idea only) |
 | 2026-10-17 | `71d5bca`, `05d7e8a` | `JobTracker.busy`; the TUI Activity panel (busy extractors and loaders, containers) |
 | 2026-10-17 | `f0d017f`, `f6bfb3f` | `UiContext.begin`; `s` starts a waiting job in the TUI; `bitdrop run --wait` |
-| 2026-10-17 | this commit | Docs and agent log for the TUI start and activity panel |
+| 2026-10-17 | `b9b1774` | Docs and agent log for the TUI start and activity panel |
+| 2026-10-17 | `1b8cfa1` | PostgreSQL chunk ids say what to read (`all`, `id.1.10000`, `x.<text>`); `InvalidChunkId` |
+| 2026-10-17 | `eb9480a` | `Source.chunk_from_id`, kit checks, memory ids `rows.<offset>.<length>`; tests stop naming `c0000NN` |
+| 2026-10-17 | this commit | Docs for chunk ids (step 1 of the queue workflow) |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of
@@ -286,6 +292,8 @@ These come from the user and from lessons in this project.
   `make check` and passed on every rerun.
 - **Timing tests** use real, very short leases and sleeps. Loops in kits are bounded so a broken implementation fails
   instead of hanging.
+- **Chunk ids are not sortable and not sequential**: before 2026-10-17 ids were `c000001`; now they describe the rows
+  (`rows.100.100`, `id.1.10000`), so tests must not sort ids or name a chunk by its index. Take it from the plan.
 - **Adding a method to a contract** breaks every class that implements it, including test stubs: the registry test's
   `StubMetadataStore` and the protocol test in `packages/bitdrop-api/tests` both implement `MetadataStore` by hand.
   `grep -rn "async def release_expired" packages` finds all implementers of that one. The kit failing for an adapter
