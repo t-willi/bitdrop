@@ -19,6 +19,7 @@ dependencies = [
     "bitdrop-cli",
     "bitdrop-tui",
     "bitdrop-queue-memory",
+    "bitdrop-marker-memory",
 ]
 
 [dependency-groups]
@@ -52,6 +53,7 @@ bitdrop-store-redis = { workspace = true }
 bitdrop-cli = { workspace = true }
 bitdrop-tui = { workspace = true }
 bitdrop-queue-memory = { workspace = true }
+bitdrop-marker-memory = { workspace = true }
 
 # ---------------------------------------------------------------------------------------------
 # pytest
@@ -88,6 +90,7 @@ known-first-party = [
     "bitdrop_cli",
     "bitdrop_tui",
     "bitdrop_queue_memory",
+    "bitdrop_marker_memory",
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -122,6 +125,7 @@ mypy_path = [
     "packages/bitdrop-cli/src",
     "packages/bitdrop-tui/src",
     "packages/bitdrop-queue-memory/src",
+    "packages/bitdrop-marker-memory/src",
 ]
 
 [[tool.mypy.overrides]]
@@ -146,6 +150,7 @@ root_packages = [
     "bitdrop_cli",
     "bitdrop_tui",
     "bitdrop_queue_memory",
+    "bitdrop_marker_memory",
 ]
 
 [[tool.importlinter.contracts]]
@@ -155,7 +160,7 @@ type = "layers"
 # Everything may import from a layer below it, never from one above or beside it.
 layers = [
     "bitdrop_cli | bitdrop_tui",
-    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file | bitdrop_metadata_memory | bitdrop_metadata_sqlite | bitdrop_connector_memory | bitdrop_connector_postgres | bitdrop_store_redis | bitdrop_queue_memory",
+    "bitdrop_core | bitdrop_store_memory | bitdrop_store_file | bitdrop_metadata_memory | bitdrop_metadata_sqlite | bitdrop_connector_memory | bitdrop_connector_postgres | bitdrop_store_redis | bitdrop_queue_memory | bitdrop_marker_memory",
     "bitdrop_api",
 ]
 
@@ -173,4 +178,5 @@ forbidden_modules = [
     "bitdrop_connector_memory",
     "bitdrop_connector_postgres",
     "bitdrop_queue_memory",
+    "bitdrop_marker_memory",
 ]

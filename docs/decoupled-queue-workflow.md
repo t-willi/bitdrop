@@ -304,7 +304,9 @@ Smallest steps that answer a question each; all run with no database via the mem
    holds it but does not remove one that was handed back; `release` does not count as a delivery; the consumer, not
    the queue, decides when a message that keeps coming back is dead-lettered.
 3. **`MarkerStore` contract** (a tiny one: set-if-absent and get of a small value, used for the recorded chunking
-   settings and the plan-complete marker), a memory adapter, and its kit, with two writers at once.
+   settings and the plan-complete marker), a memory adapter, and its kit, with two writers at once. (**done
+   2026-10-17**). `set_if_absent` answers with the value that is stored afterwards, so the loser of a race learns the
+   winner's settings in the same step and can compare them with its own.
 4. **Redis adapters** for the queue (Streams) and the markers (`SET NX`), passing the same kits on Redis, Valkey and
    Dragonfly. Question: do the stream commands behave the same on all three?
 5. **The planner**: analyze, record the settings, create the destination table, publish work messages and the

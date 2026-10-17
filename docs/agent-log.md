@@ -20,7 +20,7 @@ large bursts, so a huge full load finishes fast and cheaply.
 2. `docs/principles.md`: the binding rules (P1 every component is exchangeable, P2 never silently alter data).
 3. `docs/development.md`: layout, commands, how to add an adapter, how to run a transfer.
 4. `docs/ideation.md`: the original idea and design options; section 12 holds the measured results.
-5. `docs/decoupled-queue-workflow.md`: an idea, steps 1 and 2 of 8 built (chunk ids; the `ChunkQueue` contract with a memory adapter): source and destination containers decoupled by a
+5. `docs/decoupled-queue-workflow.md`: an idea, steps 1 to 3 of 8 built (chunk ids; the `ChunkQueue` and `MarkerStore` contracts with memory adapters): source and destination containers decoupled by a
    Redis queue, no master. Its section 12 has questions for the user.
 
 **First commands in a fresh checkout:**
@@ -42,7 +42,7 @@ Everything below is committed and passes `make check`. At the last full run: **1
 2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,205 non-Docker tests ran
 (all green); run a full `make check` where Docker exists. In particular the PostgreSQL source kit has not run
 against the new chunk ids, and the e2e test `test_a_loader_dying_after_its_commit_causes_no_duplicate_rows` changed
-from a named chunk to the 4th write. Last feature commit: `a693efc`.
+from a named chunk to the 4th write. Last feature commit: `dcb045b`.
 
 | Piece | Package / path | State |
 |---|---|---|
@@ -51,6 +51,7 @@ from a named chunk to the 4th write. Last feature commit: `a693efc`.
 | Chunk stores | `bitdrop-store-memory`, `bitdrop-store-file`, `bitdrop-store-redis` | `memory://`, `file:///dir` (use a tmpfs for RAM), `redis://` (Redis, Valkey, Dragonfly; same kit passes on all three) |
 | Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host; keeps the plan too) |
 | Queue (for the queue workflow, idea stage) | `bitdrop-queue-memory` | `ChunkQueue` contract in `bitdrop-api` (`chunk_queue.py`, kit `ChunkQueueConformance`): at-least-once; `memory://` adapter. Not used by the runner or the command yet; see `docs/decoupled-queue-workflow.md` |
+| Markers (for the queue workflow, idea stage) | `bitdrop-marker-memory` | `MarkerStore` contract in `bitdrop-api` (`marker_store.py`, kit `MarkerStoreConformance`): small values set once, first writer wins; `memory://` adapter. Not used yet |
 | Connectors | `bitdrop-connector-memory`, `bitdrop-connector-postgres` | `memory://` source+destination (`demo_rows`, `delay_ms`: a generated table and slow chunks, so no database is needed); `postgresql://` source (primary-key range splitting) and destination (ledger, native types) |
 | Command line | `bitdrop-cli` | the `bitdrop` command: `run`, `plan`, `status`, `components`; strict TOML job file with `${ENV}` in URLs; `plain` and `json` displays; exit codes 0/1/2/3/70/130; Ctrl-C and SIGTERM hand chunks back |
 | Terminal UI | `bitdrop-tui` | a live Textual screen (progress and estimate, rows/s sparklines, busy extractors and loaders and the container count, staging fill, chunk map, workers, events); `bitdrop run --wait` opens it without starting and `s` starts the load; `q`, Ctrl-C, or SIGTERM stop the job cleanly; the default on a terminal |
@@ -144,7 +145,8 @@ section 12.
 | 2026-10-17 | `eb9480a` | `Source.chunk_from_id`, kit checks, memory ids `rows.<offset>.<length>`; tests stop naming `c0000NN` |
 | 2026-10-17 | `37230e5` | Docs for chunk ids (step 1 of the queue workflow) |
 | 2026-10-17 | `a693efc` | `ChunkQueue` contract, kit, and memory adapter (step 2 of the queue workflow) |
-| 2026-10-17 | this commit | `open_chunk_queue`: queues open by URL (`bitdrop.chunk_queues` entry points) |
+| 2026-10-17 | `dcb045b` | `open_chunk_queue`: queues open by URL (`bitdrop.chunk_queues` entry points) |
+| 2026-10-17 | this commit | `MarkerStore` contract, kit, and memory adapter (step 3 of the queue workflow) |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of

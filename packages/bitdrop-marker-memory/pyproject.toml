@@ -1,0 +1,16 @@
+[project]
+name = "bitdrop-marker-memory"
+version = "0.1.0"
+description = "MarkerStore adapter keeping markers in this process's memory. For tests and single-process runs."
+requires-python = ">=3.14"
+dependencies = ["bitdrop-api"]
+
+[project.entry-points."bitdrop.marker_stores"]
+memory = "bitdrop_marker_memory:create_store"
+
+[tool.uv.sources]
+bitdrop-api = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"

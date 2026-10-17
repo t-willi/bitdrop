@@ -14,6 +14,7 @@ members = [
     "bitdrop-connector-memory",
     "bitdrop-connector-postgres",
     "bitdrop-core",
+    "bitdrop-marker-memory",
     "bitdrop-metadata-memory",
     "bitdrop-metadata-sqlite",
     "bitdrop-queue-memory",
@@ -153,6 +154,7 @@ dependencies = [
     { name = "bitdrop-connector-memory" },
     { name = "bitdrop-connector-postgres" },
     { name = "bitdrop-core" },
+    { name = "bitdrop-marker-memory" },
     { name = "bitdrop-metadata-memory" },
     { name = "bitdrop-metadata-sqlite" },
     { name = "bitdrop-queue-memory" },
@@ -181,6 +183,7 @@ requires-dist = [
     { name = "bitdrop-connector-memory", editable = "packages/bitdrop-connector-memory" },
     { name = "bitdrop-connector-postgres", editable = "packages/bitdrop-connector-postgres" },
     { name = "bitdrop-core", editable = "packages/bitdrop-core" },
+    { name = "bitdrop-marker-memory", editable = "packages/bitdrop-marker-memory" },
     { name = "bitdrop-metadata-memory", editable = "packages/bitdrop-metadata-memory" },
     { name = "bitdrop-metadata-sqlite", editable = "packages/bitdrop-metadata-sqlite" },
     { name = "bitdrop-queue-memory", editable = "packages/bitdrop-queue-memory" },
@@ -275,6 +278,17 @@ requires-dist = [
 name = "bitdrop-core"
 version = "0.1.0"
 source = { editable = "packages/bitdrop-core" }
+dependencies = [
+    { name = "bitdrop-api" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "bitdrop-api", editable = "packages/bitdrop-api" }]
+
+[[package]]
+name = "bitdrop-marker-memory"
+version = "0.1.0"
+source = { editable = "packages/bitdrop-marker-memory" }
 dependencies = [
     { name = "bitdrop-api" },
 ]
