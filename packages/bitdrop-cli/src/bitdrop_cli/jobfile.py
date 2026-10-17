@@ -36,7 +36,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from bitdrop_api.errors import BitdropError, InvalidKey
 from bitdrop_api.keys import validate_key
@@ -58,6 +66,21 @@ class _Section(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
 
+def _expand(value: object, info: ValidationInfo) -> object:
+    """Replace ``${NAME}`` in a URL by the environment variable ``NAME``."""
+    if not isinstance(value, str):
+        return value  # the type check reports it, without echoing it
+    environ: Mapping[str, str] = (info.context or {}).get("environ", {})
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in environ:
+            raise ValueError(f"environment variable {name} is not set")
+        return environ[name]
+
+    return _VARIABLE.sub(replace, value)
+
+
 class _UrlSection(_Section):
     url: str
     """``scheme://...``; ``${NAME}`` is replaced by the environment variable ``NAME``."""
@@ -65,17 +88,20 @@ class _UrlSection(_Section):
     @field_validator("url", mode="before")
     @classmethod
     def _expand_variables(cls, value: object, info: ValidationInfo) -> object:
-        if not isinstance(value, str):
-            return value  # the type check reports it, without echoing it
-        environ: Mapping[str, str] = (info.context or {}).get("environ", {})
+        return _expand(value, info)
 
-        def replace(match: re.Match[str]) -> str:
-            name = match.group(1)
-            if name not in environ:
-                raise ValueError(f"environment variable {name} is not set")
-            return environ[name]
 
-        return _VARIABLE.sub(replace, value)
+class _QueuesSection(_Section):
+    work: str
+    """The queue of chunk ids that source containers read."""
+
+    files: str
+    """The queue of staged chunks that destination containers load."""
+
+    @field_validator("work", "files", mode="before")
+    @classmethod
+    def _expand_variables(cls, value: object, info: ValidationInfo) -> object:
+        return _expand(value, info)
 
 
 class _JobSection(_Section):
@@ -119,8 +145,52 @@ class JobFile(_Section):
     source: _SourceSection
     destination: _DestinationSection
     staging: _UrlSection
-    metadata: _UrlSection
+    metadata: _UrlSection | None = None
+    """Chunk states for the master-based runner (``bitdrop run``)."""
+
+    queues: _QueuesSection | None = None
+    """The two queues of the queue workflow (``bitdrop queue ...``)."""
+
+    markers: _UrlSection | None = None
+    """Where the planner records its settings, for the queue workflow."""
+
     tuning: _TuningSection = Field(default_factory=_TuningSection)
+
+    @model_validator(mode="after")
+    def _one_workflow(self) -> JobFile:
+        if self.metadata is None and self.queues is None:
+            raise ValueError("the job needs a [metadata] or [queues] section")
+        return self
+
+    def require_metadata(self) -> _UrlSection:
+        """The metadata store of the master-based runner.
+
+        Raises:
+            JobFileError: the job file has no ``[metadata]`` section.
+        """
+        if self.metadata is None:
+            raise JobFileError("this command needs a [metadata] section in the job file")
+        return self.metadata
+
+    def require_queues(self) -> _QueuesSection:
+        """The queues of the queue workflow.
+
+        Raises:
+            JobFileError: the job file has no ``[queues]`` section.
+        """
+        if self.queues is None:
+            raise JobFileError("this command needs a [queues] section in the job file")
+        return self.queues
+
+    def require_markers(self) -> _UrlSection:
+        """The marker store of the queue workflow.
+
+        Raises:
+            JobFileError: the job file has no ``[markers]`` section.
+        """
+        if self.markers is None:
+            raise JobFileError("this command needs a [markers] section in the job file")
+        return self.markers
 
     def transfer_config(
         self,
@@ -149,13 +219,20 @@ class JobFile(_Section):
         )
 
     def endpoints(self) -> dict[str, str]:
-        """Return the four URLs with passwords hidden, safe to print."""
-        return {
-            "source": redact_url(self.source.url),
-            "destination": redact_url(self.destination.url),
-            "staging": redact_url(self.staging.url),
-            "metadata": redact_url(self.metadata.url),
+        """Return the URLs the job uses with passwords hidden, safe to print."""
+        urls = {
+            "source": self.source.url,
+            "destination": self.destination.url,
+            "staging": self.staging.url,
         }
+        if self.metadata is not None:
+            urls["metadata"] = self.metadata.url
+        if self.queues is not None:
+            urls["work"] = self.queues.work
+            urls["files"] = self.queues.files
+        if self.markers is not None:
+            urls["markers"] = self.markers.url
+        return {role: redact_url(url) for role, url in urls.items()}
 
 
 def load_job(path: Path, *, environ: Mapping[str, str] | None = None) -> JobFile:

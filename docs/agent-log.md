@@ -40,12 +40,12 @@ Their standing instructions are in section 7.
 
 ## 2. Current state
 
-Everything below is committed and passes `make check`. At the last full run: **1,891 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
+Everything below is committed and passes `make check`. At the last full run: **1,900 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
 (the skips are intentional: kit checks that do not apply to a given adapter); **300 of the tests need Docker**. The
-2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,416 non-Docker tests ran
+2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,425 non-Docker tests ran
 (all green); run a full `make check` where Docker exists. In particular the PostgreSQL source kit has not run
 against the new chunk ids, and the e2e test `test_a_loader_dying_after_its_commit_causes_no_duplicate_rows` changed
-from a named chunk to the 4th write. Last feature commit: `e21c543`.
+from a named chunk to the 4th write. Last feature commit: `83296b7`.
 
 | Piece | Package / path | State |
 |---|---|---|
@@ -158,7 +158,8 @@ section 12.
 | 2026-10-17 | `dc8f05b` | The planner and the queue messages (step 5 of the queue workflow); `ChunkingMismatch` |
 | 2026-10-17 | `e78f4f3` | `consume`: the container loop of the queue workflow (step 6, part 1) |
 | 2026-10-17 | `e21c543` | The source and destination containers of the queue workflow, with a cleanup hook in `consume` (step 6) |
-| 2026-10-17 | this commit | `queueflow_status` and `wait_until_finished`: is the job over (step 7 of the queue workflow) |
+| 2026-10-17 | `83296b7` | `queueflow_status` and `wait_until_finished`: is the job over (step 7 of the queue workflow) |
+| 2026-10-17 | this commit | Job file: `[queues]` and `[markers]` sections; `[metadata]` is optional (step 8, part 1) |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of

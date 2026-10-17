@@ -114,7 +114,7 @@ async def run_job(
         source = _closing(parts, open_source(job.source.url))
         destination = _closing(parts, open_destination(job.destination.url))
         staging = _closing(parts, open_chunk_store(job.staging.url))
-        metadata = _closing(parts, open_metadata_store(job.metadata.url))
+        metadata = _closing(parts, open_metadata_store(job.require_metadata().url))
         ui = open_ui(
             ui_name,
             UiContext(
@@ -221,7 +221,7 @@ async def job_status(job: JobFile) -> StatusSummary:
     """
     job_id = job.job.id
     async with AsyncExitStack() as parts:
-        metadata = _closing(parts, open_metadata_store(job.metadata.url))
+        metadata = _closing(parts, open_metadata_store(job.require_metadata().url))
         counts = dict(await metadata.counts(job_id))
     if not any(counts.values()):
         raise BitdropError(f"no chunks are registered for job {job_id!r} in this metadata store")
