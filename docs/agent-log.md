@@ -20,7 +20,7 @@ large bursts, so a huge full load finishes fast and cheaply.
 2. `docs/principles.md`: the binding rules (P1 every component is exchangeable, P2 never silently alter data).
 3. `docs/development.md`: layout, commands, how to add an adapter, how to run a transfer.
 4. `docs/ideation.md`: the original idea and design options; section 12 holds the measured results.
-5. `docs/decoupled-queue-workflow.md`: an idea, step 1 of 8 built (chunk ids): source and destination containers decoupled by a
+5. `docs/decoupled-queue-workflow.md`: an idea, steps 1 and 2 of 8 built (chunk ids; the `ChunkQueue` contract with a memory adapter): source and destination containers decoupled by a
    Redis queue, no master. Its section 12 has questions for the user.
 
 **First commands in a fresh checkout:**
@@ -50,6 +50,7 @@ from a named chunk to the 4th write. Last feature commit: `eb9480a`.
 | Core | `bitdrop-core` | `registry.py` (opens components by URL, displays by name, via entry points), `transfer.py` (`run_transfer`: saved plan, extractors, loaders, reaper, heartbeats, timeouts, backpressure, clean stop, progress observer), `progress.py` (events), `tracker.py` (events to display state), `ui.py` (`ProgressUi` contract), `summary.py`, `humanize.py`, `codec.py` (Arrow IPC, none/lz4/zstd) |
 | Chunk stores | `bitdrop-store-memory`, `bitdrop-store-file`, `bitdrop-store-redis` | `memory://`, `file:///dir` (use a tmpfs for RAM), `redis://` (Redis, Valkey, Dragonfly; same kit passes on all three) |
 | Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host; keeps the plan too) |
+| Queue (for the queue workflow, idea stage) | `bitdrop-queue-memory` | `ChunkQueue` contract in `bitdrop-api` (`chunk_queue.py`, kit `ChunkQueueConformance`): at-least-once; `memory://` adapter. Not used by the runner or the command yet; see `docs/decoupled-queue-workflow.md` |
 | Connectors | `bitdrop-connector-memory`, `bitdrop-connector-postgres` | `memory://` source+destination (`demo_rows`, `delay_ms`: a generated table and slow chunks, so no database is needed); `postgresql://` source (primary-key range splitting) and destination (ledger, native types) |
 | Command line | `bitdrop-cli` | the `bitdrop` command: `run`, `plan`, `status`, `components`; strict TOML job file with `${ENV}` in URLs; `plain` and `json` displays; exit codes 0/1/2/3/70/130; Ctrl-C and SIGTERM hand chunks back |
 | Terminal UI | `bitdrop-tui` | a live Textual screen (progress and estimate, rows/s sparklines, busy extractors and loaders and the container count, staging fill, chunk map, workers, events); `bitdrop run --wait` opens it without starting and `s` starts the load; `q`, Ctrl-C, or SIGTERM stop the job cleanly; the default on a terminal |
@@ -141,7 +142,8 @@ section 12.
 | 2026-10-17 | `b9b1774` | Docs and agent log for the TUI start and activity panel |
 | 2026-10-17 | `1b8cfa1` | PostgreSQL chunk ids say what to read (`all`, `id.1.10000`, `x.<text>`); `InvalidChunkId` |
 | 2026-10-17 | `eb9480a` | `Source.chunk_from_id`, kit checks, memory ids `rows.<offset>.<length>`; tests stop naming `c0000NN` |
-| 2026-10-17 | this commit | Docs for chunk ids (step 1 of the queue workflow) |
+| 2026-10-17 | `37230e5` | Docs for chunk ids (step 1 of the queue workflow) |
+| 2026-10-17 | this commit | `ChunkQueue` contract, kit, and memory adapter (step 2 of the queue workflow) |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of

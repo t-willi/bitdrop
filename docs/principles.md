@@ -15,6 +15,7 @@ change (and a different image)**, never a code change in the core or in another 
 | Destination connector | `Destination`: prepare, write a chunk idempotently (ledger), count | In-memory, PostgreSQL (built); ClickHouse, Parquet/S3, … (planned) |
 | Chunk store (data plane) | `ChunkStore`: put/get/delete a blob by key | In-memory, file/tmpfs, Redis protocol (Redis, Valkey, Dragonfly) (built); memcached, Arrow Flight peers (planned; Garnet should work through the Redis adapter but is untested) |
 | Metadata store | `MetadataStore`: save the job's plan; register / claim / heartbeat / complete / fail chunks, with leases and fencing | In-memory, SQLite (built); Redis, Postgres, etcd (planned) |
+| Chunk queue | `ChunkQueue`: publish, receive (waiting up to a time), reclaim, touch, ack, release, dead-letter; at-least-once | In-memory (built); Redis Streams (planned) |
 | Chunk codec | `ChunkCodec`: encode/decode record batches | Arrow IPC, optionally lz4 / zstd (built; injected as an object, no URL registry yet) |
 | Memory governor | `Governor`: admission control over byte credits | credit-based, … |
 | Progress display | `ProgressUi`: observer of a running transfer, shown to a person or a program | plain text, JSON lines, full-screen TUI (built); selected by name, not URL |

@@ -64,6 +64,7 @@ bitdrop/
 │   ├── bitdrop-store-redis/      ChunkStore adapter for the Redis protocol: Redis, Valkey, Dragonfly
 │   ├── bitdrop-metadata-memory/  MetadataStore adapter: dicts in this process
 │   ├── bitdrop-metadata-sqlite/  MetadataStore adapter: a SQLite file (persistent, multi-process)
+│   ├── bitdrop-queue-memory/     ChunkQueue adapter: dicts in this process (the queue workflow, not wired in yet)
 │   ├── bitdrop-connector-memory/ Source + Destination over in-memory Arrow tables
 │   ├── bitdrop-connector-postgres/ Source + Destination for PostgreSQL (ADBC); needs Docker to test
 │   ├── bitdrop-cli/              The `bitdrop` command: job file, run / plan / status / components, plain and JSON displays

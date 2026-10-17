@@ -298,7 +298,11 @@ Smallest steps that answer a question each; all run with no database via the mem
 1. **Chunk ids carry the chunk** (`Source` change; **done 2026-10-17**, `eb9480a` and `1b8cfa1`): a method that turns a chunk id back into a chunk spec, the
    readable id form for the PostgreSQL and memory connectors, and a kit check that parsing an id gives the spec the
    planner made. Question: does every connector have a natural id form?
-2. **`ChunkQueue` contract**, a memory adapter, and the conformance kit. Question: is the contract tight enough?
+2. **`ChunkQueue` contract**, a memory adapter, and the conformance kit (**done 2026-10-17**). Question: is the
+   contract tight enough? It settled these points: a delivery is numbered, only the latest is current, and a taken-over
+   holder's `touch`, `release` and `dead_letter` fail with `DeliveryLost`; `ack` settles a message in flight whoever
+   holds it but does not remove one that was handed back; `release` does not count as a delivery; the consumer, not
+   the queue, decides when a message that keeps coming back is dead-lettered.
 3. **`MarkerStore` contract** (a tiny one: set-if-absent and get of a small value, used for the recorded chunking
    settings and the plan-complete marker), a memory adapter, and its kit, with two writers at once.
 4. **Redis adapters** for the queue (Streams) and the markers (`SET NX`), passing the same kits on Redis, Valkey and

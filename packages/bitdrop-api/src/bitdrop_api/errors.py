@@ -7,6 +7,7 @@ types, so the core can react to *what happened* without knowing *which backend* 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from bitdrop_api.chunk_queue import Delivery
     from bitdrop_api.metadata_store import Claim
 
 
@@ -117,6 +118,26 @@ class PlanMismatch(MetadataStoreError):
         self.job_id = job_id
         self.planned_table = planned_table
         self.requested_table = requested_table
+
+
+class QueueError(BitdropError):
+    """Base class of errors raised by a :class:`~bitdrop_api.chunk_queue.ChunkQueue`."""
+
+
+class DeliveryLost(QueueError):
+    """The delivery is no longer the current one: handed back, taken over, or settled.
+
+    The holder must stop working on the message and discard its result; another consumer owns it
+    now (or it is gone).
+    """
+
+    def __init__(self, delivery: Delivery) -> None:
+        """Create the error for the stale ``delivery``."""
+        super().__init__(
+            f"delivery lost: delivery #{delivery.deliveries} of message {delivery.message_id!r} "
+            f"to consumer {delivery.consumer!r} is no longer current"
+        )
+        self.delivery = delivery
 
 
 class ConnectorError(BitdropError):
