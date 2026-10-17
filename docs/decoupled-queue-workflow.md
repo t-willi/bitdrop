@@ -187,7 +187,7 @@ each chunk id to one container at a time.
 1. Calls `Source.plan` for the table. The source connector is the one place that knows how to split (PostgreSQL
    by integer primary key, others differently), and its kit already enforces that chunks are disjoint and
    complete. The planner never reads rows.
-2. Records the settings the chunking used (table, split column, chunk size), creates the destination table from
+2. Records the settings the chunking used (table, split column, chunk size) in Redis, set-if-absent, creates the destination table from
    the plan's columns and types, and refuses if this job id was already chunked with different settings.
 3. Publishes one **work message** per chunk to the work queue, then one **plan-complete marker**
    `{job, chunks: N}`, and exits.
@@ -290,18 +290,27 @@ loaded, republish the rest. This is the reason for keeping the message small and
 
 Smallest steps that answer a question each; all run with no database via the memory connector.
 
-1. `ChunkQueue` contract, a memory adapter, and the conformance kit. Question: is the contract tight enough?
-2. Redis Streams adapter, passing the same kit on Redis, Valkey and Dragonfly. Question: do the stream commands
-   behave the same on all three (Dragonfly and Valkey differ in places)?
-3. Source loop and destination loop as plain functions over the contracts, driven by the fault-injection style
-   tests already used for `run_transfer` (kill after write, kill after commit, duplicate offer, poison chunk).
-4. The planner (analyze, record the settings, create the destination table, publish work messages and the marker)
-   and a source loop that parses a chunk id and reads it; several source containers; a test that the union of rows is
-   complete and disjoint after a kill, that an unparseable id is dead-lettered, and that a second planner run with
-   other settings is refused.
-5. Completion from the planner's marker and a read-only `status`.
-6. Two role images and a docker-compose file; then measure throughput against the current design on the same
+1. **Chunk ids carry the chunk** (`Source` change): a method that turns a chunk id back into a chunk spec, the
+   readable id form for the PostgreSQL and memory connectors, and a kit check that parsing an id gives the spec the
+   planner made. Question: does every connector have a natural id form?
+2. **`ChunkQueue` contract**, a memory adapter, and the conformance kit. Question: is the contract tight enough?
+3. **`MarkerStore` contract** (a tiny one: set-if-absent and get of a small value, used for the recorded chunking
+   settings and the plan-complete marker), a memory adapter, and its kit, with two writers at once.
+4. **Redis adapters** for the queue (Streams) and the markers (`SET NX`), passing the same kits on Redis, Valkey and
+   Dragonfly. Question: do the stream commands behave the same on all three?
+5. **The planner**: analyze, record the settings, create the destination table, publish work messages and the
+   marker. Tests: a second run with other settings is refused; the same settings republish the same ids; a crash
+   halfway republishes safely.
+6. **The source loop and the destination loop** as plain functions over the contracts, driven by the
+   fault-injection style tests already used for `run_transfer` (kill after write, kill after commit, duplicate
+   offer, poison chunk, an unparseable id), with several source containers: the rows read are complete and
+   disjoint after a kill.
+7. **Completion and a read-only `status`** from the planner's marker and the destination ledger.
+8. **Two role images and a docker-compose file**; then measure throughput against the current design on the same
    table. Question: does removing the master change speed, or only complexity?
+
+Each step is test first and committed on its own. Steps 1 to 3 and 5 to 7 run with no database or Docker through
+the memory adapters; step 4 and the PostgreSQL part of step 1 need Docker.
 
 ## 12. Decided and open
 
@@ -314,6 +323,9 @@ Smallest steps that answer a question each; all run with no database via the mem
 - A load balancer (dispatcher) after the stream is possible; see section 4. Pull is the starting point.
 - The table is analyzed and chunked before extraction starts; chunk identifiers go into a work queue; a source
   connector takes an id and reads that chunk (section 7).
+- Redis is the only shared service. The planner's recorded chunking settings (the check that stops a second,
+  different chunking of one job) are a key in Redis next to the plan-complete marker, written set-if-absent
+  (`SET NX`), so two planners started at once end with one chunking.
 - The chunk id carries the chunk's definition; the destination needs no order, and uses the id only to refuse
   duplicates through its ledger (section 7).
 
@@ -321,8 +333,6 @@ Smallest steps that answer a question each; all run with no database via the mem
 
 - Should this **replace** the master-based runner or sit **beside** it as a second mode? (It reuses every
   connector and store, so both can live in one repository.)
-- Where do the planner's recorded settings live (the check that stops a second, different chunking of one job)?
-  A key in Redis next to the plan-complete marker is the simplest.
 - Is a lost queue acceptable if the rebuild in section 8 exists, or must the queue itself be durable?
 - Is there a concrete reason for a dispatcher (a per-database concurrency limit, zone routing), or is pull enough
   for now?
