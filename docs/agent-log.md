@@ -4,7 +4,7 @@ The handoff document between work sessions: what exists, what was decided and wh
 A new session reads sections 1 and 2 first, checks 5 for what to do next, and updates this file before it ends
 (section 9). It is checked by `tests/architecture/test_agent_log.py`, so it cannot silently fall behind the code.
 
-Last updated: 2026-10-17
+Last updated: 2026-10-18
 
 ## 1. Start here
 
@@ -22,8 +22,8 @@ large bursts, so a huge full load finishes fast and cheaply.
 4. `docs/ideation.md`: the original idea and design options; section 12 holds the measured results.
 5. `docs/decoupled-queue-workflow.md`: an alternative to the master: a planner, source containers, and destination
    containers joined by two Redis queues. All eight build steps exist (`bitdrop queue ...`, `docker/Dockerfile`,
-   `examples/queue/`); the Redis adapters and the Docker example are untested on real servers. Its section 12 has
-   the open questions for the user.
+   `examples/queue/`); run on real servers and in Docker on 2026-10-18. Its section 12 has the open questions for
+   the user.
 
 **First commands in a fresh checkout:**
 
@@ -34,20 +34,19 @@ make demo        # watch a demo job in the TUI (no database, no Docker)
 make check       # lint + strict types + architecture rules + every test (needs Docker for ~300 of them)
 ```
 
-**Needs checking on a machine with Docker:** the cloud sessions have none. `docs/verify-on-your-machine.md` lists what
-was not run for real. Read it, remind the owner, and update it when something is verified or added.
+**Needs checking on a machine with Docker:** the cloud sessions have none, so what they write is checked only against
+fakes until the owner runs it. `docs/verify-on-your-machine.md` lists what is still not run for real (queue throughput
+between hosts; the TUI looked at by a person) and what was verified on 2026-10-18. Read it, remind the owner, and
+update it when something is verified or added.
 
 **Who you work with.** The user owns the project, prefers Python, and wants it clean, tested, and documented.
 Their standing instructions are in section 7.
 
 ## 2. Current state
 
-Everything below is committed and passes `make check`. At the last full run: **1,932 tests collected**. The last full run with Docker (before 2026-10-17) was 1,367 passed and 23 skipped of 1,390
-(the skips are intentional: kit checks that do not apply to a given adapter); **300 of the tests need Docker**. The
-2026-10-17 session had no Docker, so only lint, types, architecture rules, and the 1,457 non-Docker tests ran
-(all green); run a full `make check` where Docker exists. In particular the PostgreSQL source kit has not run
-against the new chunk ids, and the e2e test `test_a_loader_dying_after_its_commit_causes_no_duplicate_rows` changed
-from a named chunk to the 4th write. Last feature commit: `923d05c`.
+Everything below is committed and passes `make check`. At the last full run (2026-10-18, with Docker): **1,935 tests
+collected, 1,910 passed, 25 skipped** (the skips are intentional: kit checks that do not apply to a given adapter, and
+two waiting tests that the fake Redis cannot run); **477 of the tests need Docker**. Last feature commit: `7bbda1d`.
 
 | Piece | Package / path | State |
 |---|---|---|
@@ -57,14 +56,14 @@ from a named chunk to the 4th write. Last feature commit: `923d05c`.
 | Metadata stores | `bitdrop-metadata-memory`, `bitdrop-metadata-sqlite` | `memory://`, `sqlite:///file.db` (persistent, multi-process on one host; keeps the plan too) |
 | Queue (for the queue workflow, idea stage) | `bitdrop-queue-memory` | `ChunkQueue` contract in `bitdrop-api` (`chunk_queue.py`, kit `ChunkQueueConformance`): at-least-once; `memory://` adapter. Not used by the runner or the command yet; see `docs/decoupled-queue-workflow.md` |
 | Queue workflow core | `bitdrop-core` (`bitdrop_core/queueflow/`) | `run_planner` (plan, record settings/schema/chunk fingerprint once in a `MarkerStore`, prepare the destination, publish one work message per chunk, write the `planned` marker last) and the message/marker formats. `consume` (the loop every container runs: receive, take over silent holders, touch while working, retry, dead-letter, hand back on cancel). `run_source_worker` (chunk id to rows to staged chunk to file message) and `run_destination_worker` (staged chunk to destination; the staged chunk is deleted after the acknowledgement). A handler may return a cleanup that runs after the ack. `queueflow_status` / `wait_until_finished` (read-only; work queue counted before the file queue; state from the planner's markers and both queues). Reachable as `bitdrop queue plan / source / destination / status` |
-| Redis queue (queue workflow) | `bitdrop-queue-redis` | `ChunkQueue` on Redis Streams: `redis://host/0?bitdrop_queue=<name>`. Handed-back messages move to a reserved consumer `__released__`; dead letters go to a second stream. **Kit passes on `fakeredis` only; real Redis, Valkey, Dragonfly not run yet** (`docs/verify-on-your-machine.md`) |
-| Redis markers (queue workflow) | `bitdrop-marker-redis` | `MarkerStore` on `SET key value NX` then `GET`: `redis://host/0`, keys `<prefix>marker:<key>`. **Kit passes on `fakeredis` only; real servers not run yet** (`docs/verify-on-your-machine.md`) |
+| Redis queue (queue workflow) | `bitdrop-queue-redis` | `ChunkQueue` on Redis Streams: `redis://host/0?bitdrop_queue=<name>`. Handed-back messages move to a reserved consumer `__released__`; dead letters go to a second stream. Kit passes on `fakeredis` and on real Redis, Valkey, and Dragonfly (105 tests, 2026-10-18) |
+| Redis markers (queue workflow) | `bitdrop-marker-redis` | `MarkerStore` on `SET key value NX` then `GET`: `redis://host/0`, keys `<prefix>marker:<key>`. Kit passes on `fakeredis` and on real Redis, Valkey, and Dragonfly (63 tests, 2026-10-18) |
 | Markers (for the queue workflow, idea stage) | `bitdrop-marker-memory` | `MarkerStore` contract in `bitdrop-api` (`marker_store.py`, kit `MarkerStoreConformance`): small values set once, first writer wins; `memory://` adapter. Not used yet |
 | Connectors | `bitdrop-connector-memory`, `bitdrop-connector-postgres` | `memory://` source+destination (`demo_rows`, `delay_ms`: a generated table and slow chunks, so no database is needed); `postgresql://` source (primary-key range splitting) and destination (ledger, native types) |
 | Command line | `bitdrop-cli` | the `bitdrop` command: `run`, `plan`, `status`, `components`; strict TOML job file with `${ENV}` in URLs; `plain` and `json` displays; exit codes 0/1/2/3/70/130; Ctrl-C and SIGTERM hand chunks back |
 | Terminal UI | `bitdrop-tui` | a live Textual screen (progress and estimate, rows/s sparklines, busy extractors and loaders and the container count, staging fill, chunk map, workers, events); `bitdrop run --wait` opens it without starting and `s` starts the load; `q`, Ctrl-C, or SIGTERM stop the job cleanly; the default on a terminal |
 | Cross-package tests | `tests/integration`, `tests/e2e`, `tests/architecture` | swap tests, runner with injected faults and clean stops, the saved plan (resume, two masters at once), real PostgreSQL to PostgreSQL (also through the `bitdrop` command, with a Ctrl-C and a resume), architecture rules, this log's checks |
-| Examples | `examples/demo.toml` | a job that needs no database; checked by a test, so it cannot rot |
+| Examples | `examples/demo.toml`, `examples/queue/` | `demo.toml`: a job that needs no database; `queue/`: the queue workflow in Docker, 2M rows (run 2026-10-18, scaled and with sources killed); both checked by tests, so they cannot rot |
 | Benchmarks | `benchmarks/test_chunk_store_throughput.py` | `make bench`: chunk store throughput table |
 | Tooling | `scripts/mutation_check.sh`, `scripts/add_workspace_package.py` | break-the-code-on-purpose check (stops a hanging run); register a new workspace package (`--top` for front ends; tested against the real pyproject) |
 
@@ -163,7 +162,12 @@ section 12.
 | 2026-10-17 | `83296b7` | `queueflow_status` and `wait_until_finished`: is the job over (step 7 of the queue workflow) |
 | 2026-10-17 | `e7f0e2d` | Job file: `[queues]` and `[markers]` sections; `[metadata]` is optional (step 8, part 1) |
 | 2026-10-17 | `923d05c` | `bitdrop queue plan / source / destination / status` (step 8, part 2) |
-| 2026-10-17 | this commit | `docker/Dockerfile`, the `examples/queue/` compose example, an in-memory benchmark (step 8, part 3; the Docker files are unrun) |
+| 2026-10-17 | `26f167f` | `docker/Dockerfile`, the `examples/queue/` compose example, an in-memory benchmark (step 8, part 3; written without Docker) |
+| 2026-10-18 | `0a45f1f` | The PostgreSQL splitting test checks the new chunk ids (it failed only with Docker) |
+| 2026-10-18 | `fa84fef` | The role image builds and starts (`--no-sources`); `tests/e2e/test_role_image.py` builds it and runs the command |
+| 2026-10-18 | `7bbda1d` | Compose example: database health checks over TCP, so the planner cannot start too early |
+| 2026-10-18 | `65e7491` | The Docker verification recorded: verify list, queue workflow document, development notes |
+| 2026-10-18 | this commit | Agent log for the Docker verification |
 
 Method used throughout: write the test, watch it fail for the right reason, implement, then break the code on purpose
 (`scripts/mutation_check.sh`) to prove the tests would notice. This found real weaknesses (a kit that hung instead of
@@ -175,10 +179,11 @@ Nothing here is started unless marked. Roughly in the order I would do it.
 
 **Next up**
 
-1. **Role entry points and containers**: one image per role (master, extractor, loader), Kubernetes manifests. P1 says
-   every function gets its own container; none exists yet. The plan is in the metadata store now, so a worker can read
-   it; what is missing is a worker loop that takes a job id and the component URLs and runs without the master, and
-   something that decides when the job is over.
+1. **Kubernetes manifests for the roles.** The queue workflow has its role entry points and one image (`bitdrop queue
+   plan | source | destination`, `docker/Dockerfile`; run in Docker 2026-10-18); manifests (autoscaling on queue length)
+   do not exist. The master-based runner has no container form: a worker loop that takes a job id and the component
+   URLs and runs without the master. Whether the queue workflow replaces the runner is an open question for the user
+   (`docs/decoupled-queue-workflow.md`, section 12); decide that first.
 2. **Memory governor**: byte-credit admission control, a hard `maxmemory` backstop, scaling workers. Today only simple
    backpressure exists (an extractor waits while the staging store is full). The `Governor` and `Provisioner` contracts
    listed in `docs/principles.md` are not built.
@@ -251,6 +256,9 @@ decided: TOML job file, Typer, Textual; see `docs/cli-plan.md`.)
 - The TUI's chunk map and worker table are built from events, so a lease voided by the reaper shows only when the chunk
   is started again; the counts come from the metadata store and are authoritative.
 - `bitdrop status` shows counts only, not which chunks failed.
+- A queue workflow container waits for a plan as long as there is none. If the planner fails (the first Docker run: it
+  started before the database accepted connections), the sources and destinations wait for ever unless
+  `--give-up-after` is set; the compose example does not set it.
 
 ## 7. Working rules
 
@@ -316,6 +324,18 @@ These come from the user and from lessons in this project.
   instead of hanging.
 - **Chunk ids are not sortable and not sequential**: before 2026-10-17 ids were `c000001`; now they describe the rows
   (`rows.100.100`, `id.1.10000`), so tests must not sort ids or name a chunk by its index. Take it from the plan.
+- **Docker, found by the first real run (2026-10-18):**
+  - `uv pip install ./packages/x` with `workspace = true` sources installs the members *editable*, as links to the
+    source folder; a multi-stage image that copies only the venv then has no `bitdrop_api`. `--no-sources` installs
+    plain packages. `tests/e2e/test_role_image.py` is the check.
+  - The `postgres` image seeds `/docker-entrypoint-initdb.d` behind a temporary server with no TCP port, and
+    `pg_isready` without `-h` asks over the Unix socket, so "healthy" comes too early. Use `-h 127.0.0.1`.
+  - `docker compose ps` prints `ExitCode=0` for a container that is still running. Wait with
+    `docker inspect --format '{{.State.Status}}'` until it says `exited`, and count the containers.
+  - The example job takes 3 s, too short to kill a source in the middle of a chunk. Pause the staging Redis
+    (`docker pause`), let the sources take their messages and stall, `docker kill` some, then unpause: another source
+    takes the chunks over after the lease. Only touch the containers of the example's own compose project.
+  - `${NAME}` in a job file is expanded in URLs only, not in `job.id` or `table`; template those yourself.
 - **Adding a method to a contract** breaks every class that implements it, including test stubs: the registry test's
   `StubMetadataStore` and the protocol test in `packages/bitdrop-api/tests` both implement `MetadataStore` by hand.
   `grep -rn "async def release_expired" packages` finds all implementers of that one. The kit failing for an adapter
