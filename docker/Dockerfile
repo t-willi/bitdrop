@@ -10,8 +10,10 @@ FROM python:3.14-slim AS build
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 WORKDIR /src
 COPY packages ./packages
+# --no-sources: the packages name each other as `workspace = true`, which would install them editable,
+# as links to /src, a folder the final image does not have.
 RUN uv venv /opt/venv \
- && uv pip install --python /opt/venv/bin/python --no-cache \
+ && uv pip install --python /opt/venv/bin/python --no-cache --no-sources \
     ./packages/bitdrop-api \
     ./packages/bitdrop-core \
     ./packages/bitdrop-cli \
