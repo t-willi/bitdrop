@@ -23,6 +23,9 @@ x-bitdrop: &bitdrop
   volumes:
     - ./job.toml:/job.toml:ro
 
+# The health checks ask over TCP (-h 127.0.0.1). The image starts a temporary server that listens on a
+# Unix socket only while it seeds the database; a check over the socket passes then, and the planner
+# would find the real server not yet listening.
 services:
   source-db:
     image: postgres:17-alpine
@@ -32,7 +35,7 @@ services:
     volumes:
       - ./init-source.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d shop"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d shop"]
       interval: 2s
       retries: 60
 
@@ -42,7 +45,7 @@ services:
       POSTGRES_PASSWORD: example
       POSTGRES_DB: shop
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d shop"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d shop"]
       interval: 2s
       retries: 60
 

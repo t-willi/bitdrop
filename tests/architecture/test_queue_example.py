@@ -55,6 +55,17 @@ def test_the_files_the_compose_file_mounts_exist() -> None:
         assert (EXAMPLE / mounted).is_file(), mounted
 
 
+def test_the_database_health_checks_ask_over_tcp() -> None:
+    """The image seeds a database behind a temporary server that has no TCP port. A check over the
+    Unix socket passes then, the planner starts too early, and it fails with "Connection refused"
+    (seen with a scaled run); containers connect over TCP, so the check must too."""
+    checks = re.findall(r'"pg_isready[^"]*"', (EXAMPLE / "docker-compose.yml").read_text())
+
+    assert len(checks) == 2, "one health check for each database"
+    for check in checks:
+        assert "-h 127.0.0.1" in check, check
+
+
 def test_the_source_table_has_an_integer_primary_key() -> None:
     sql = (EXAMPLE / "init-source.sql").read_text()
 
