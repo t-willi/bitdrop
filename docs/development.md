@@ -268,7 +268,10 @@ toolkit. `examples/queue/docker-compose.yml` runs a whole job with two PostgreSQ
 (staging without persistence, coordination with an append-only file):
 `docker compose -f examples/queue/docker-compose.yml up --build`, and `--scale source=6 --scale destination=4` to change
 the number of containers. `tests/architecture/test_queue_example.py` checks the files against each other without
-Docker. To add an adapter to the image, add its package to the list in the Dockerfile.
+Docker, and `tests/e2e/test_role_image.py` (Docker) builds the image and runs the command in it. To add an adapter
+to the image, add its package to the list in the Dockerfile. The database health checks in the compose file ask over
+TCP (`-h 127.0.0.1`): the database image answers a check over its Unix socket while it is still seeding, before it
+accepts connections from the other containers.
 
 **Stopping and resuming.** Ctrl-C, SIGTERM, and `q` stop the job cleanly: every chunk a worker holds is handed
 back to the metadata store without counting a failure, and the command exits with 130. Running the same command

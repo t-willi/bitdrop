@@ -1,7 +1,8 @@
 # bitdrop — alternative workflow: decoupled source and destination over a queue
 
-Status: **idea, nothing built** (written 2026-10-17). This describes a second way to run a transfer next to the
-current one (`docs/ideation.md`, `docs/principles.md`). It keeps the principles: components stay behind contracts
+Status: **built and run** (designed and written 2026-10-17; run against real servers and in Docker 2026-10-18, see
+section 11). This describes a second way to run a transfer next to the current one (`docs/ideation.md`,
+`docs/principles.md`). It keeps the principles: components stay behind contracts
 (P1) and a value is stored exactly or refused (P2).
 
 ## 1. The idea in one paragraph
@@ -310,8 +311,8 @@ Smallest steps that answer a question each; all run with no database via the mem
 4. **Redis adapters** for the queue (Streams) and the markers (`SET NX`), passing the same kits on Redis, Valkey and
    Dragonfly. Question: do the stream commands behave the same on all three?
    *Written 2026-10-17 in a session without Docker:* the queue passes its kit on `fakeredis` (which does not block
-   `XREADGROUP`, so two waiting tests are skipped there); the run on the three real servers is still to do (see
-   `docs/verify-on-your-machine.md`). Streams cannot un-deliver a message, so a `release` moves
+   `XREADGROUP`, so two waiting tests are skipped there). *Run 2026-10-18 on the three real servers:* 105 tests pass
+   on Redis, Valkey and Dragonfly alike, and the marker store's 63 as well. Streams cannot un-deliver a message, so a `release` moves
    it to a reserved consumer with a large idle time and a lowered counter, and the next `receive` claims it from
    there; a waiting `receive` therefore notices a handed-back message only on its next call.
 5. **The planner** (**done 2026-10-17**, `bitdrop_core.queueflow.run_planner`): analyze, record the settings, create the destination table, publish work messages and the
@@ -340,14 +341,20 @@ Smallest steps that answer a question each; all run with no database via the mem
    transit could be missed and a job reported finished too early. Extracted and loaded counts are derived from the
    queues and approximate after a republish. The `Destination` has no "how many chunks are loaded" query, so the
    ledger count in the plan above is not used; an empty file queue plus no dead letters stands in for it.
-8. **One role image and a docker-compose file** (**written 2026-10-17, not run**: no Docker in that session; see
-   `docs/verify-on-your-machine.md`). `docker/Dockerfile` builds one image for every role, because the role is only
+8. **One role image and a docker-compose file** (**written 2026-10-17, run 2026-10-18**; the first run found three
+   faults, all fixed, see below). `docker/Dockerfile` builds one image for every role, because the role is only
    the command (`bitdrop queue plan | source | destination`); it holds the command line tool and the Redis and
    PostgreSQL adapters and no display toolkit. `examples/queue/` has the job file, a source database seeded with two
    million rows, and a compose file with a planner, three source containers, two destination containers, a staging
-   Redis (no persistence, `noeviction`) and a coordination Redis (append-only file). The Python layer of the image was
-   checked by installing the same packages into a clean virtual environment. Then measure throughput against the
+   Redis (no persistence, `noeviction`) and a coordination Redis (append-only file). Then measure throughput against the
    current design on the same table. Question: does removing the master change speed, or only complexity?
+   *First run, 2026-10-18:* the image did not build (the packages name each other as `workspace = true`; and with
+   the root copied they were installed as links to a folder the final image lacks; `--no-sources` fixes both), and
+   the planner could start before the database accepted TCP connections (the database image's temporary init
+   server answers a health check over the Unix socket; the checks now ask over TCP). After the fixes the whole
+   example, 2,000,000 rows with 3 sources and 2 destinations, takes 2.76 s from first container start to last exit,
+   scaled to 6 + 4 it completes as well, and a source killed mid-job loses nothing: another takes over its chunks
+   after the 60 s lease (`2 taken over`), with the same table checksum on both sides.
 
 Each step is test first and committed on its own. Steps 1 to 3 and 5 to 7 run with no database or Docker through
 the memory adapters; step 4 and the PostgreSQL part of step 1 need Docker.
@@ -367,7 +374,12 @@ master-based runner and with the queue workflow, on the in-memory adapters only 
 Read with care: one process, no network, a table that sits in RAM. It says the queue design adds no coordination
 cost of its own (a fraction of a millisecond per chunk, the same as the metadata store), not that it is faster.
 With 10,000-row chunks both finish in 0.03 s and the numbers merge. The real question, the cost of a network
-round trip per message to Redis, is open and needs the compose example on a machine with Docker.
+round trip per message to Redis, was measured on 2026-10-18 on one machine: with the same worker counts the queue
+design takes about 1.5 s longer than the master on this 2.6 s job (4.1 s against 2.6 s with 16 chunks), nearly all of
+it fixed cost (five more interpreter starts and the one-second poll for "is the job over"); going from 16 to 123
+chunks adds a few milliseconds per chunk over the master. The table is in `docs/verify-on-your-machine.md`. So
+on a job this short the queue design is not faster, and the data cannot say whether it is at scale: that needs a
+job long enough for the fixed costs to vanish, and two hosts with a real network between them and Redis.
 
 ## 12. Decided and open
 
