@@ -39,7 +39,7 @@ class TestSplitting:
         assert ranges[0][0] == 1
         assert ranges[-1][1] == 2000
         assert all(prev[1] + 1 == nxt[0] for prev, nxt in itertools.pairwise(ranges))
-        assert [c.chunk_id for c in plan.chunks] == [f"c{i:06d}" for i in range(len(ranges))]
+        assert [c.chunk_id for c in plan.chunks] == [f"id.{lo}.{hi}" for lo, hi in ranges]
         await source.aclose()
 
     async def test_bigger_targets_make_fewer_chunks(

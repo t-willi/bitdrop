@@ -28,6 +28,9 @@ class StubSource:
     async def plan(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
 
+    def chunk_from_id(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError
+
     async def read_chunk(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
 

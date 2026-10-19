@@ -6,6 +6,12 @@ The core never imports an adapter. Instead, each adapter package announces itsel
     [project.entry-points."bitdrop.chunk_stores"]
     memory = "bitdrop_store_memory:create_store"
 
+    [project.entry-points."bitdrop.chunk_queues"]
+    memory = "bitdrop_queue_memory:create_queue"
+
+    [project.entry-points."bitdrop.marker_stores"]
+    memory = "bitdrop_marker_memory:create_store"
+
     [project.entry-points."bitdrop.metadata_stores"]
     sqlite = "bitdrop_metadata_sqlite:create_store"
 
@@ -25,9 +31,11 @@ from importlib.metadata import entry_points
 from typing import cast
 from urllib.parse import urlsplit
 
+from bitdrop_api.chunk_queue import ChunkQueue
 from bitdrop_api.chunk_store import ChunkStore
 from bitdrop_api.destination import Destination
 from bitdrop_api.errors import BitdropError
+from bitdrop_api.marker_store import MarkerStore
 from bitdrop_api.metadata_store import MetadataStore
 from bitdrop_api.source import Source
 from bitdrop_api.urls import redact_url
@@ -35,6 +43,12 @@ from bitdrop_core.ui import ProgressUi, UiContext
 
 CHUNK_STORE_GROUP = "bitdrop.chunk_stores"
 """Entry point group under which chunk store adapters register."""
+
+CHUNK_QUEUE_GROUP = "bitdrop.chunk_queues"
+"""Entry point group under which chunk queue adapters register."""
+
+MARKER_STORE_GROUP = "bitdrop.marker_stores"
+"""Entry point group under which marker store adapters register."""
 
 METADATA_STORE_GROUP = "bitdrop.metadata_stores"
 """Entry point group under which metadata store adapters register."""
@@ -50,6 +64,12 @@ UI_GROUP = "bitdrop.uis"
 
 ChunkStoreFactory = Callable[[str], ChunkStore]
 """Builds a chunk store from the full URL it was selected with."""
+
+ChunkQueueFactory = Callable[[str], ChunkQueue]
+"""Builds a chunk queue from the full URL it was selected with."""
+
+MarkerStoreFactory = Callable[[str], MarkerStore]
+"""Builds a marker store from the full URL it was selected with."""
 
 MetadataStoreFactory = Callable[[str], MetadataStore]
 """Builds a metadata store from the full URL it was selected with."""
@@ -107,6 +127,8 @@ class _Kind:
 
 
 _CHUNK_STORES = _Kind("chunk store", CHUNK_STORE_GROUP, ChunkStore)
+_CHUNK_QUEUES = _Kind("chunk queue", CHUNK_QUEUE_GROUP, ChunkQueue)
+_MARKER_STORES = _Kind("marker store", MARKER_STORE_GROUP, MarkerStore)
 _METADATA_STORES = _Kind("metadata store", METADATA_STORE_GROUP, MetadataStore)
 _SOURCES = _Kind("source", SOURCE_GROUP, Source)
 _DESTINATIONS = _Kind("destination", DESTINATION_GROUP, Destination)
@@ -116,6 +138,16 @@ _UIS = _Kind("progress UI", UI_GROUP, ProgressUi)
 def available_chunk_stores() -> list[str]:
     """Return the URL schemes of all installed chunk store adapters, sorted."""
     return _available(_CHUNK_STORES)
+
+
+def available_chunk_queues() -> list[str]:
+    """Return the URL schemes of all installed chunk queue adapters, sorted."""
+    return _available(_CHUNK_QUEUES)
+
+
+def available_marker_stores() -> list[str]:
+    """Return the URL schemes of all installed marker store adapters, sorted."""
+    return _available(_MARKER_STORES)
 
 
 def available_metadata_stores() -> list[str]:
@@ -155,6 +187,26 @@ def open_chunk_store(
         InvalidComponent: the adapter's factory did not return a ChunkStore.
     """
     return cast(ChunkStore, _open(_CHUNK_STORES, url, factories))
+
+
+def open_chunk_queue(
+    url: str, *, factories: Mapping[str, ChunkQueueFactory] | None = None
+) -> ChunkQueue:
+    """Open the chunk queue selected by ``url``.
+
+    Arguments and errors are those of :func:`open_chunk_store`.
+    """
+    return cast(ChunkQueue, _open(_CHUNK_QUEUES, url, factories))
+
+
+def open_marker_store(
+    url: str, *, factories: Mapping[str, MarkerStoreFactory] | None = None
+) -> MarkerStore:
+    """Open the marker store selected by ``url``.
+
+    Arguments and errors are those of :func:`open_chunk_store`.
+    """
+    return cast(MarkerStore, _open(_MARKER_STORES, url, factories))
 
 
 def open_metadata_store(

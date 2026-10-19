@@ -43,7 +43,7 @@ class TestAGoodFile:
         assert job.job.id == "orders-1"
         assert (job.source.url, job.source.table) == ("memory://?demo_rows=100", "demo")
         assert (job.destination.url, job.destination.table) == ("memory://", "orders")
-        assert job.staging.url == job.metadata.url == "memory://"
+        assert job.staging.url == job.require_metadata().url == "memory://"
 
     def test_tuning_is_optional_and_means_the_runner_defaults(self, tmp_path: Path) -> None:
         config = load(tmp_path, GOOD).transfer_config()

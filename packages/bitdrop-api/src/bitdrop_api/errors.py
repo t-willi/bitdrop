@@ -7,6 +7,7 @@ types, so the core can react to *what happened* without knowing *which backend* 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from bitdrop_api.chunk_queue import Delivery
     from bitdrop_api.metadata_store import Claim
 
 
@@ -119,8 +120,66 @@ class PlanMismatch(MetadataStoreError):
         self.requested_table = requested_table
 
 
+class QueueError(BitdropError):
+    """Base class of errors raised by a :class:`~bitdrop_api.chunk_queue.ChunkQueue`."""
+
+
+class QueueUnavailable(QueueError):
+    """A networked queue could not be reached, or refused a request.
+
+    The request may be retried.
+    """
+
+    def __init__(self, detail: str) -> None:
+        """Create the error; ``detail`` says what went wrong (never include secrets)."""
+        super().__init__(f"queue unavailable: {detail}")
+
+
+class DeliveryLost(QueueError):
+    """The delivery is no longer the current one: handed back, taken over, or settled.
+
+    The holder must stop working on the message and discard its result; another consumer owns it
+    now (or it is gone).
+    """
+
+    def __init__(self, delivery: Delivery) -> None:
+        """Create the error for the stale ``delivery``."""
+        super().__init__(
+            f"delivery lost: delivery #{delivery.deliveries} of message {delivery.message_id!r} "
+            f"to consumer {delivery.consumer!r} is no longer current"
+        )
+        self.delivery = delivery
+
+
+class ChunkingMismatch(BitdropError):
+    """A job id that was chunked one way was asked to chunk the table another way.
+
+    The chunk ids are the destination's duplicate guard, so one job must keep one set of chunks: a
+    different chunk size, split column, schema, or a table that grew since the first plan would
+    give the same rows different ids and load them twice.
+    """
+
+    def __init__(self, job_id: str, what: str) -> None:
+        """Create the error for ``job_id``; ``what`` says which part differs."""
+        super().__init__(
+            f"job {job_id!r} was already chunked with other {what}; "
+            "use a new job id to chunk the table again"
+        )
+        self.job_id = job_id
+        self.what = what
+
+
 class ConnectorError(BitdropError):
     """Base class of errors raised by a source or destination connector."""
+
+
+class InvalidChunkId(ConnectorError):
+    """A source cannot turn a chunk id into a chunk: not one of its ids, or not canonical."""
+
+    def __init__(self, chunk_id: str, reason: str) -> None:
+        """Create the error for ``chunk_id``; ``reason`` says what is wrong with it."""
+        super().__init__(f"invalid chunk id: {reason} (chunk_id={chunk_id!r})")
+        self.chunk_id = chunk_id
 
 
 class TableNotFound(ConnectorError):

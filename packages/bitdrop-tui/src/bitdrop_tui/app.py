@@ -28,6 +28,7 @@ from bitdrop_core.tracker import JobTracker
 from bitdrop_core.transfer import TransferReport
 from bitdrop_core.ui import UiContext
 from bitdrop_tui.render import (
+    activity_text,
     chunk_map,
     legend,
     overall_text,
@@ -131,6 +132,7 @@ class BitdropApp(App[None]):
     #overall { height: 4; }
     #mid { height: 6; }
     #throughput { width: 3fr; }
+    #activity { width: 2fr; }
     #staging { width: 2fr; }
     #chunks { height: auto; min-height: 4; }
     #low { height: 1fr; min-height: 5; }
@@ -141,6 +143,7 @@ class BitdropApp(App[None]):
     BINDINGS = [  # noqa: RUF012  (Textual reads this class attribute)
         Binding("q", "stop", "Stop safely"),
         Binding("ctrl+c", "stop", "Stop", show=False, priority=True),
+        Binding("s", "start", "Start the load"),
         Binding("l", "toggle_events", "Events"),
     ]
 
@@ -150,6 +153,7 @@ class BitdropApp(App[None]):
         self._ui = ui
         self._job = job
         self._stopping = False
+        self._waiting = ui.context.begin is not None
 
     def compose(self) -> ComposeResult:
         """Lay out the panels."""
@@ -157,6 +161,7 @@ class BitdropApp(App[None]):
         yield Static(id="overall", classes="panel")
         with Horizontal(id="mid"):
             yield Static(id="throughput", classes="panel")
+            yield Static(id="activity", classes="panel")
             yield Static(id="staging", classes="panel")
         yield Static(id="chunks", classes="panel")
         with Horizontal(id="low"):
@@ -171,6 +176,7 @@ class BitdropApp(App[None]):
         for selector, title in (
             ("#overall", "Progress"),
             ("#throughput", "Rows per second"),
+            ("#activity", "Activity"),
             ("#staging", "Staging tier"),
             ("#chunks", "Chunks"),
             ("#workers-box", "Workers"),
@@ -178,6 +184,8 @@ class BitdropApp(App[None]):
         ):
             self.query_one(selector).border_title = title
         self.query_one("#banner").display = False
+        if self._waiting:
+            self._banner("Ready. Press s to start the load, or q to leave.", "bold green")
         self.refresh_view()
         self.set_interval(REFRESH_SECONDS, self.refresh_view)
         self.run_worker(self._watch_job(), exit_on_error=False)
@@ -195,6 +203,14 @@ class BitdropApp(App[None]):
         )
         self.query_one("#throughput", Static).update(
             throughput_text(tracker, width=self._width("#throughput"))
+        )
+        plan = tracker.plan
+        self.query_one("#activity", Static).update(
+            activity_text(
+                tracker,
+                extractors=plan.extractors if plan else context.extractors,
+                loaders=plan.loaders if plan else context.loaders,
+            )
         )
         self.query_one("#staging", Static).update(
             staging_text(tracker, width=self._width("#staging"))
@@ -217,6 +233,24 @@ class BitdropApp(App[None]):
         log = self.query_one("#events", RichLog)
         for line in self._ui.take_lines():
             log.write(line)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Offer ``start`` only while the job is waiting to be started."""
+        if action == "start":
+            return self._waiting
+        return True
+
+    def action_start(self) -> None:
+        """Let a waiting job begin. Does nothing if it already has."""
+        begin = self._ui.context.begin
+        if not self._waiting or begin is None:
+            return
+        self._waiting = False
+        begin()
+        banner = self.query_one("#banner", Static)
+        banner.update("")
+        banner.display = False
+        self.refresh_bindings()
 
     def action_stop(self) -> None:
         """Ask the job to stop; leave at once if it already has, or if asked a second time."""

@@ -64,6 +64,10 @@ bitdrop/
 │   ├── bitdrop-store-redis/      ChunkStore adapter for the Redis protocol: Redis, Valkey, Dragonfly
 │   ├── bitdrop-metadata-memory/  MetadataStore adapter: dicts in this process
 │   ├── bitdrop-metadata-sqlite/  MetadataStore adapter: a SQLite file (persistent, multi-process)
+│   ├── bitdrop-queue-redis/      ChunkQueue adapter on Redis Streams (Redis, Valkey, Dragonfly); needs Docker to test on real servers
+│   ├── bitdrop-queue-memory/     ChunkQueue adapter: dicts in this process (the queue workflow, not wired in yet)
+│   ├── bitdrop-marker-redis/     MarkerStore adapter: `SET NX` on a Redis-protocol server; needs Docker to test on real servers
+│   ├── bitdrop-marker-memory/    MarkerStore adapter: a dict in this process (the queue workflow, not wired in yet)
 │   ├── bitdrop-connector-memory/ Source + Destination over in-memory Arrow tables
 │   ├── bitdrop-connector-postgres/ Source + Destination for PostgreSQL (ADBC); needs Docker to test
 │   ├── bitdrop-cli/              The `bitdrop` command: job file, run / plan / status / components, plain and JSON displays
@@ -125,6 +129,14 @@ Two rules from the saved plan. A `MetadataStore` keeps the plan bytes exactly as
 two writers at once. A `Source` puts only values in its `ChunkSpec.payload` that JSON keeps exactly (text, numbers,
 booleans, null, lists, dicts with text keys; not tuples, dates, or sets): the plan is saved as JSON, and the source
 kit fails a payload that would change.
+
+A `Source`'s chunk ids say what to read. `chunk_from_id(table, chunk_id)` turns an id back into the chunk without
+planning or I/O, so a worker handed only an id can read it (the queue workflow in
+[decoupled-queue-workflow.md](decoupled-queue-workflow.md)). The format is the source's own; the core treats an id as
+an opaque key. Each chunk has exactly one spelling, and `chunk_from_id` refuses every other (`InvalidChunkId`),
+because the destination ledger is keyed by the id and a second spelling would load the same rows twice. The id must
+still obey the key rule, so a source falls back to an encoded form when its natural description does not fit. The
+source kit checks the round trip.
 
 1. **Create the package** with the same layout as an existing adapter: `packages/bitdrop-store-<name>/` for a
    ChunkStore, `packages/bitdrop-metadata-<name>/` for a MetadataStore. Depend only on `bitdrop-api` plus your client
@@ -220,15 +232,46 @@ to them as `${NAME}`: they stay out of the file, and no message the command prin
 
 | Command | What it does |
 |---|---|
-| `bitdrop run JOB.toml` | Run the job. `--ui auto\|tui\|plain\|json`, `--job-id`, `--extractors`, `--loaders`, `-v` |
+| `bitdrop run JOB.toml` | Run the job. `--ui auto\|tui\|plain\|json`, `--wait`, `--job-id`, `--extractors`, `--loaders`, `-v` |
 | `bitdrop plan JOB.toml` | Show how the source table would be cut into chunks. Moves no data, never opens the destination. `--json` |
 | `bitdrop status JOB.toml` | Chunk counts as the metadata store has them, whoever is running the job. `--json` |
-| `bitdrop components` | The connectors, stores, and displays that are installed |
+| `bitdrop components` | The connectors, stores, queues, marker stores, and displays that are installed |
+| `bitdrop queue plan JOB.toml` | The queue workflow's planner: chunk the table, publish one chunk id per chunk. `--republish` for a lost work queue |
+| `bitdrop queue source JOB.toml` | A source container: read the chunks named in the work queue and stage them. `--name`, `--stop-when-finished`, `--give-up-after` |
+| `bitdrop queue destination JOB.toml` | A destination container: load the staged chunks named in the file queue. Same options |
+| `bitdrop queue status JOB.toml` | The state of a queue job from the markers and the two queues. `--wait`, `--give-up-after`, `--json` |
 
 **Displays.** `auto` (the default) is the TUI on an interactive terminal when `bitdrop-tui` is installed, plain
 text otherwise. `plain` prints a progress line every two seconds to standard error and a summary to standard
 output. `json` prints one JSON object per line on standard output (`plan`, `progress`, `chunk_failed`, then
-`report`, `stopped`, or `error`) and no URLs. In the TUI, `q` (or Ctrl-C) stops the job and `l` hides the events.
+`report`, `stopped`, or `error`) and no URLs. In the TUI, `q` (or Ctrl-C) stops the job and `l` hides the events. An Activity panel shows how many extractors
+and loaders are busy out of the configured numbers, and how many containers run them (always 1 for now: every
+worker runs inside the one process that runs the job).
+
+**Opening the TUI without starting the load.** `bitdrop run JOB.toml --wait` opens the TUI and moves nothing; press
+`s` to start the load, or `q` to leave (the command then prints `not started` and exits with 130). `--wait` works
+only with the TUI, because only it can start a job.
+
+**The queue workflow** (`docs/decoupled-queue-workflow.md`) needs `[queues]` (`work` and `files` URLs) and
+`[markers]` in the job file instead of `[metadata]`; `staging`, `source` and `destination` are as before. Run
+`bitdrop queue plan` once, then any number of `queue source` and `queue destination` containers, which can start in
+any order. A container runs until stopped: SIGTERM or Ctrl-C makes it finish the chunk in hand and leave (a second
+Ctrl-C hands the chunk back at once). `--stop-when-finished` makes it leave by itself: a source when every chunk is
+extracted, a destination when the whole job is over. Exit codes: 0 done, 1 some chunks were set aside or the wait ran
+out, 2 bad configuration, 3 refused by a component (a job id chunked differently, for instance). `[tuning]`:
+`lease_seconds` is how long a chunk may sit untouched before another container takes it over, `max_attempts` how
+often it may fail, `poll_seconds` how long a container waits for a new message.
+
+**Docker.** `docker/Dockerfile` builds one image for every role of the queue workflow (the role is the command:
+`bitdrop queue plan`, `queue source`, `queue destination`), with the Redis and PostgreSQL adapters and no display
+toolkit. `examples/queue/docker-compose.yml` runs a whole job with two PostgreSQL databases and two Redis servers
+(staging without persistence, coordination with an append-only file):
+`docker compose -f examples/queue/docker-compose.yml up --build`, and `--scale source=6 --scale destination=4` to change
+the number of containers. `tests/architecture/test_queue_example.py` checks the files against each other without
+Docker, and `tests/e2e/test_role_image.py` (Docker) builds the image and runs the command in it. To add an adapter
+to the image, add its package to the list in the Dockerfile. The database health checks in the compose file ask over
+TCP (`-h 127.0.0.1`): the database image answers a check over its Unix socket while it is still seeding, before it
+accepts connections from the other containers.
 
 **Stopping and resuming.** Ctrl-C, SIGTERM, and `q` stop the job cleanly: every chunk a worker holds is handed
 back to the metadata store without counting a failure, and the command exits with 130. Running the same command
@@ -319,6 +362,8 @@ other query options go to libpq. Passwords are redacted from every error message
 - *Source*: reads the catalog, splits the table by integer primary key into inclusive ranges sized from a sample of
   the row width (sparse keys get wider ranges; the extremes of `bigint` do not overflow). Without an integer primary
   key it reads one chunk, and says so in the plan notes. `split_column` overrides the choice (NOT NULL integer).
+  Chunk ids are `<column>.<first>.<last>` (`id.1.10000`), `all` for the whole table, or `x.<text>` (the payload as
+  URL-safe base64 JSON) for a column name the key rule forbids. The memory connector uses `rows.<offset>.<length>`.
 - *Destination*: creates the schema and table (from native type hints when the source is PostgreSQL, otherwise from
   Arrow types) **without indexes or constraints**, which is much faster for bulk loads; add them afterwards. Each
   chunk is one transaction: ledger row plus `COPY`.

@@ -104,6 +104,8 @@ class TestComponents:
         assert "memory" in by_kind["destinations"]
         assert "memory" in by_kind["staging"]
         assert "memory" in by_kind["metadata"]
+        assert "memory" in by_kind["queues"]
+        assert "memory" in by_kind["markers"]
         assert "plain" in by_kind["displays"]
         assert "json" in by_kind["displays"]
 
@@ -317,10 +319,10 @@ class TestStatus:
 
 
 class FlakySource(MemorySource):
-    """Every read of chunk ``c000001`` fails."""
+    """Every read of the plan's second chunk fails."""
 
     async def read_chunk(self, plan: SourcePlan, chunk: ChunkSpec) -> pa.Table:
-        if chunk.chunk_id == "c000001":
+        if chunk.chunk_id == plan.chunks[1].chunk_id:
             raise ConnectionError("source went away")
         return await super().read_chunk(plan, chunk)
 
@@ -385,7 +387,7 @@ class TestExitPaths:
 
         assert result.exit_code == 1
         assert "FAILED" in result.stdout
-        assert "c000001" in result.stdout
+        assert "rows." in result.stdout
         assert "source went away" in result.stdout
 
     def test_a_display_that_stops_the_job_means_exit_code_130_and_a_hint_to_resume(

@@ -90,7 +90,7 @@ async def assert_staging_is_empty(w: World, report: TransferReport) -> None:
     """Every blob was removed: the RAM tier holds nothing once the job is over."""
     for index in range(report.chunks_total):
         with pytest.raises(ChunkNotFound):
-            await w.chunks.get(f"job-1:c{index:06d}")
+            await w.chunks.get(f"job-1:rows.{index * ROWS_PER_CHUNK}.{ROWS_PER_CHUNK}")
 
 
 # -- the happy path -------------------------------------------------------------------------------
@@ -211,28 +211,28 @@ class SlowSource(MemorySource):
 class TestHeartbeats:
     async def test_a_read_slower_than_the_lease_is_not_taken_over_by_someone_else(self) -> None:
         """Without heartbeats the reaper would void the lease and the chunk would be read twice."""
-        source = SlowSource("c000002", delay=0.5)
+        source = SlowSource("rows.200.100", delay=0.5)
         w = world(source=source, rows=1000)
 
         report = await run(w, config(lease_seconds=0.15, reaper_interval=0.02))
 
         assert report.succeeded
         assert source.reads == report.chunks_total, "a chunk was read more than once"
-        assert (await w.meta.get_chunk("job-1", "c000002")).failures == 0
+        assert (await w.meta.get_chunk("job-1", "rows.200.100")).failures == 0
 
 
 class TestSourceFailures:
     async def test_a_transient_read_error_is_retried(self) -> None:
-        w = world(source=FlakySource({"c000003"}, failures=1))
+        w = world(source=FlakySource({"rows.300.100"}, failures=1))
 
         report = await run(w)
 
         assert report.succeeded
         assert copied(w).equals(make_rows(1, ROWS))
-        assert (await w.meta.get_chunk("job-1", "c000003")).failures == 1
+        assert (await w.meta.get_chunk("job-1", "rows.300.100")).failures == 1
 
     async def test_a_permanently_failing_chunk_is_reported_and_the_rest_still_arrives(self) -> None:
-        w = world(source=FlakySource({"c000003"}, failures=-1))
+        w = world(source=FlakySource({"rows.300.100"}, failures=-1))
 
         report = await run(w, config(max_attempts=2))
 
@@ -240,7 +240,7 @@ class TestSourceFailures:
         assert (report.chunks_loaded, report.chunks_failed) == (report.chunks_total - 1, 1)
         failure = report.failures[0]
         assert (failure.chunk_id, failure.state, failure.failures) == (
-            "c000003",
+            "rows.300.100",
             ChunkState.FAILED,
             2,
         )
@@ -278,7 +278,7 @@ class TestLoaderCrashAfterCommit:
     """The duplicate window the destination ledger exists for."""
 
     async def test_a_failure_after_commit_does_not_duplicate_rows(self) -> None:
-        w = world(destination=CommitThenDieDestination("c000007"))
+        w = world(destination=CommitThenDieDestination("rows.700.100"))
 
         report = await run(w)
 
@@ -290,7 +290,7 @@ class TestLoaderCrashAfterCommit:
         self,
     ) -> None:
         """The loader commits, then hangs. The chunk timeout cuts it off and the chunk is redone."""
-        w = world(destination=CommitThenDieDestination("c000007", hang=True))
+        w = world(destination=CommitThenDieDestination("rows.700.100", hang=True))
 
         report = await run(w, config(chunk_timeout=0.15))
 
@@ -315,13 +315,13 @@ class AmnesiacStore(MemoryChunkStore):
 
 class TestLostBlob:
     async def test_a_chunk_missing_from_the_store_is_extracted_again(self) -> None:
-        w = world(chunks=AmnesiacStore("job-1:c000005"))
+        w = world(chunks=AmnesiacStore("job-1:rows.500.100"))
 
         report = await run(w)
 
         assert report.succeeded
         assert copied(w).equals(make_rows(1, ROWS))
-        assert (await w.meta.get_chunk("job-1", "c000005")).failures == 1
+        assert (await w.meta.get_chunk("job-1", "rows.500.100")).failures == 1
 
 
 class HangingStore(MemoryChunkStore):
@@ -350,13 +350,13 @@ class TestHungChunkStore:
 
     @pytest.mark.parametrize("operation", ["get", "put"])
     async def test_a_hung_call_is_timed_out_and_the_chunk_retried(self, operation: str) -> None:
-        w = world(chunks=HangingStore("job-1:c000004", hang_on=operation))
+        w = world(chunks=HangingStore("job-1:rows.400.100", hang_on=operation))
 
         report = await run(w, config(chunk_timeout=0.15))
 
         assert report.succeeded
         assert copied(w).equals(make_rows(1, ROWS))
-        assert (await w.meta.get_chunk("job-1", "c000004")).failures == 1
+        assert (await w.meta.get_chunk("job-1", "rows.400.100")).failures == 1
         await assert_staging_is_empty(w, report)
 
 
@@ -512,7 +512,7 @@ async def assert_nothing_is_held_and_nothing_failed(w: World) -> None:
     counts = await w.meta.counts("job-1")
     assert counts[ChunkState.EXTRACTING] == counts[ChunkState.LOADING] == 0, dict(counts)
     for index in range(sum(counts.values())):
-        record = await w.meta.get_chunk("job-1", f"c{index:06d}")
+        record = await w.meta.get_chunk("job-1", f"rows.{index * ROWS_PER_CHUNK}.{ROWS_PER_CHUNK}")
         assert (record.failures, record.worker_id) == (0, None), record
 
 
@@ -612,7 +612,9 @@ class TestCrashing:
 
         assert report.succeeded
         assert copied(w).equals(make_rows(1, 1000))
-        assert (await w.meta.get_chunk("job-1", "c000000")).failures == 1, "a lost lease costs one"
+        assert (await w.meta.get_chunk("job-1", "rows.0.100")).failures == 1, (
+            "a lost lease costs one"
+        )
 
 
 # -- resuming -------------------------------------------------------------------------------------

@@ -1,0 +1,101 @@
+# The queue workflow with real databases and Redis:
+#
+#     docker compose -f examples/queue/docker-compose.yml up --build
+#     docker compose -f examples/queue/docker-compose.yml up --scale source=6 --scale destination=4
+#
+# One planner chunks the table and exits. Any number of source containers read chunks from the
+# source database into the staging Redis; any number of destination containers load them into the
+# destination database. They share only Redis, start in any order, and leave when the job is over.
+# The passwords are for this local example only.
+
+name: bitdrop-queue-example
+
+x-bitdrop: &bitdrop
+  image: bitdrop:dev
+  build:
+    context: ../..
+    dockerfile: docker/Dockerfile
+  environment:
+    SOURCE_URL: postgresql://postgres:example@source-db:5432/shop
+    DESTINATION_URL: postgresql://postgres:example@destination-db:5432/shop
+    STAGING_URL: redis://staging:6379/0
+    COORDINATION_URL: redis://coordination:6379/0
+  volumes:
+    - ./job.toml:/job.toml:ro
+
+# The health checks ask over TCP (-h 127.0.0.1). The image starts a temporary server that listens on a
+# Unix socket only while it seeds the database; a check over the socket passes then, and the planner
+# would find the real server not yet listening.
+services:
+  source-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: example
+      POSTGRES_DB: shop
+    volumes:
+      - ./init-source.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d shop"]
+      interval: 2s
+      retries: 60
+
+  destination-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: example
+      POSTGRES_DB: shop
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d shop"]
+      interval: 2s
+      retries: 60
+
+  # The data plane: chunks wait here. No persistence (the source is the durable copy) and a full
+  # server refuses writes instead of dropping chunks, which makes the source containers wait.
+  staging:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "2gb", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+
+  # The queues and markers: small, and worth keeping if the server restarts.
+  coordination:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+
+  planner:
+    <<: *bitdrop
+    command: ["queue", "plan", "/job.toml"]
+    restart: "no"
+    depends_on:
+      source-db: {condition: service_healthy}
+      destination-db: {condition: service_healthy}
+      staging: {condition: service_healthy}
+      coordination: {condition: service_healthy}
+
+  source:
+    <<: *bitdrop
+    command: ["queue", "source", "/job.toml", "--stop-when-finished"]
+    restart: "no"
+    deploy:
+      replicas: 3
+    depends_on:
+      source-db: {condition: service_healthy}
+      staging: {condition: service_healthy}
+      coordination: {condition: service_healthy}
+
+  destination:
+    <<: *bitdrop
+    command: ["queue", "destination", "/job.toml", "--stop-when-finished"]
+    restart: "no"
+    deploy:
+      replicas: 2
+    depends_on:
+      destination-db: {condition: service_healthy}
+      staging: {condition: service_healthy}
+      coordination: {condition: service_healthy}

@@ -25,7 +25,7 @@ from collections.abc import AsyncIterator
 import pyarrow as pa
 import pytest
 
-from bitdrop_api.errors import TableNotFound
+from bitdrop_api.errors import InvalidChunkId, TableNotFound
 from bitdrop_api.keys import validate_key
 from bitdrop_api.plan import decode_plan, encode_plan
 from bitdrop_api.source import Source, SourcePlan
@@ -167,6 +167,30 @@ class SourceConformance:
 
         assert restored.chunks == plan.chunks
         assert _sorted(await _read_all(source, restored)).equals(_sorted(expected))
+
+    async def test_a_chunk_id_alone_gives_back_the_chunk(
+        self, source: Source, table_name: str, expected: pa.Table
+    ) -> None:
+        """A worker handed only an id reads the same rows as the plan's chunk, with no plan."""
+        plan = await source.plan(table_name, target_chunk_bytes=10_000)
+        bare = SourcePlan(plan.table, plan.schema, ())
+
+        restored = [source.chunk_from_id(table_name, chunk.chunk_id) for chunk in plan.chunks]
+
+        assert [chunk.chunk_id for chunk in restored] == [chunk.chunk_id for chunk in plan.chunks]
+        assert [chunk.payload for chunk in restored] == [chunk.payload for chunk in plan.chunks]
+        tables = [await source.read_chunk(bare, chunk) for chunk in restored]
+        assert _sorted(pa.concat_tables(tables)).equals(_sorted(expected))
+
+    @pytest.mark.parametrize("chunk_id", ["", "nonsense", "c-1", "x.", "rows.", "9" * 60])
+    async def test_an_id_that_is_not_one_of_its_own_is_refused(
+        self, source: Source, table_name: str, chunk_id: str
+    ) -> None:
+        """Nothing is guessed from a foreign id (P2): it is refused, never read as another chunk."""
+        with pytest.raises(InvalidChunkId) as excinfo:
+            source.chunk_from_id(table_name, chunk_id)
+
+        assert excinfo.value.chunk_id == chunk_id
 
     # -- edge cases -----------------------------------------------------------------------------
 

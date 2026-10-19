@@ -1,0 +1,33 @@
+# The queue workflow between two PostgreSQL databases, as run by docker-compose.yml next to this file.
+# The URLs come from the environment, so no password sits in the file.
+#
+#     docker compose -f examples/queue/docker-compose.yml up --build
+#
+# The planner chunks the table and exits; the source and destination containers read the chunk
+# ids and the staged chunks from Redis, start in any order, and leave when the job is over.
+
+[job]
+id = "orders-1"
+
+[source]
+url = "${SOURCE_URL}"
+table = "public.orders"
+
+[destination]
+url = "${DESTINATION_URL}"
+table = "public.orders"
+
+[staging]                       # the chunks wait in RAM here; no persistence, noeviction
+url = "${STAGING_URL}"
+
+[queues]                        # the chunk ids and the staged chunks' names; needs persistence
+work = "${COORDINATION_URL}?bitdrop_queue=work"
+files = "${COORDINATION_URL}?bitdrop_queue=files"
+
+[markers]
+url = "${COORDINATION_URL}"
+
+[tuning]
+chunk_mib = 8
+lease_seconds = 60              # a chunk untouched this long is taken over by another container
+max_attempts = 3

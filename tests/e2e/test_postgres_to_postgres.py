@@ -339,15 +339,20 @@ async def test_an_empty_table_creates_an_empty_copy(
 
 
 class CommitThenDieDestination(PostgresDestination):
-    """Really commits a chunk to PostgreSQL, then fails once, as if the loader died right after."""
+    """Really commits a chunk to PostgreSQL, then fails once, as if the loader died right after.
 
-    def __init__(self, url: str, victim: str) -> None:
+    The victim is the ``victim``-th chunk written (counting from 1); chunk ids say which rows a
+    chunk covers, so the test no longer names one in advance.
+    """
+
+    def __init__(self, url: str, victim: int) -> None:
         super().__init__(url)
-        self.victim, self.struck = victim, False
+        self.victim, self.writes, self.struck = victim, 0, False
 
     async def write_chunk(self, job_id: str, chunk_id: str, table: str, data: pa.Table):  # type: ignore[no-untyped-def]
         result = await super().write_chunk(job_id, chunk_id, table, data)
-        if chunk_id == self.victim and not self.struck:
+        self.writes += 1
+        if self.writes == self.victim and not self.struck:
             self.struck = True
             raise ConnectionError("loader died after the commit")
         return result
@@ -363,7 +368,7 @@ async def test_a_loader_dying_after_its_commit_causes_no_duplicate_rows(
         destination_url,
         source_table="people",
         destination_table="people",
-        destination=CommitThenDieDestination(destination_url, victim="c000003"),
+        destination=CommitThenDieDestination(destination_url, victim=4),
         target_chunk_bytes=100_000,
     )
 
